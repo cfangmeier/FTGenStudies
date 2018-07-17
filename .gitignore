@@ -4,3 +4,6 @@ procs/
 py.py
 *.log
 *.dat
+
+MG5_debug
+ME5_debug
