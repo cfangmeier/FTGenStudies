@@ -27,6 +27,8 @@ def info(text, **kwargs):
 def info2(text, **kwargs):
     print(C.OKGREEN+text+C.ENDC, **kwargs)
 
+FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
+
 template = '''
 define p = p b b~
 define j = p
@@ -108,9 +110,16 @@ def tables():
             self.proc = proc
             self.beamenergy = beamenergy
             self.crossx = 'N/A'
-            self.stat_err = 0
-            self.syst_err = 0
+            self.stat_err = None
+            self.scale_err = None
+            self.cs_err = None
+            self.pdf_err = None
+            self.err_str = ""
             self.note = ""
+    scale_re = re.compile("scale variation: ({flt})% ({flt})%".format(flt=FLT_RE))
+    scale_re2 = re.compile("              {flt} pb  ({flt})% ({flt})%".format(flt=FLT_RE))
+    cs_re = re.compile("central scheme variation: ({flt})% ({flt})%".format(flt=FLT_RE))
+    pdf_re = re.compile("PDF variation: ({flt})% ({flt})%".format(flt=FLT_RE))
     rows = []
     for fname in glob("procs/*"):
         proc, beamenergy = re.findall(r"procs/([a-zA-Z_0-9]+)_([0-9\.]+)TeV", fname)[0]
@@ -119,23 +128,41 @@ def tables():
             with open(join(fname, 'crossx.html')) as f:
                 soup = Soup(f, 'html5lib')
             text_raw = soup.select("tr")[1].select("td")[3].get_text()
-            crossx, stat_err = re.findall(r"([\.0-9e\-]+) . ([\.0-9e\-]+)", text_raw, re.UNICODE)[0]
+            crossx, stat_err = re.findall(r"({flt}) . ({flt})".format(flt=FLT_RE), text_raw, re.UNICODE)[0]
             row.crossx = crossx
             row.stat_err = stat_err
+            print(stat_err)
 
             # Since MG is dumb, LO systematics are stored separately from NLO systematics
             # ¯\_(ツ)_/¯
-            if "nlo" in proc:
-                # get from NLO place: {proc}/Events/run_01/summary.txt
-                pass
-            else:
+            print(fname)
+            try:
                 # get from LO place: bottom of {proc}/Events/run_01/parton_systematics.log
-                pass
+                with open(join(fname, 'Events/run_01/parton_systematics.log')) as f:
+                    txt = f.read()
+                row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re.findall(txt)[0]]
+                row.cs_err = [abs(float(s.replace(' ', ''))) for s in cs_re.findall(txt)[0]]
+                row.pdf_err = [abs(float(s.replace(' ', ''))) for s in pdf_re.findall(txt)[0]]
+            except IOError:
+                # get from NLO place: {proc}/Events/run_01/summary.txt
+                with open(join(fname, 'Events/run_01/summary.txt')) as f:
+                    txt = f.read()
+                row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re2.findall(txt)[0]]
+
+            row.err_str += "&#177;{:s}(stat) ".format(row.stat_err)
+            if row.scale_err is not None:
+                row.err_str += "<font style=\"background-color:#f1f1f1\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(scale)</font>".format(*row.scale_err)
+            if row.cs_err is not None:
+                row.err_str += "<font style=\"background-color:#ffccff\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(Central Scheme)</font>".format(*row.cs_err)
+            if row.pdf_err is not None:
+                row.err_str += "<font style=\"background-color:#b3ffb3\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(pdf)</font>".format(*row.pdf_err)
 
         except IOError as e:
-            row.note = "crossx.html not found"
+            row.note = "Files missing"
+            raise e
         except IndexError as e:
-            row.note = "couldn't extract xsection from crossx.html"
+            row.note = "Files malformed"
+            raise e
 
         rows.append(row)
 
@@ -144,7 +171,7 @@ def tables():
     rows_html = [("<tr><td><a href=\"{}\">{}</a></td><td>{}</td>"
                   "<td>{}</td><td>{}</td><td>{}</td></tr>").format(dir_name(row.proc, row.beamenergy),
                                                                    row.proc, row.beamenergy,
-                                                                   row.crossx, procs[row.proc], row.note) for row in rows]
+                                                                   row.crossx+row.err_str, procs[row.proc], row.note) for row in rows]
     header = "<tr><th>Process</th><th>Beam Energy</th><th>Cross-Section (pb)</th><th>Command</th><th>Note</th></tr>"
     table = "<table>{}<tbody>{}</tbody><table>".format(header, '\n'.join(rows_html))
 
