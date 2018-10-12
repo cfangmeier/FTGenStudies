@@ -1,12 +1,14 @@
 #!/usr/bin/env python2
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 import argparse
 from glob import glob
 from os import rename, walk, chmod
-from os.path import isfile, isdir, expanduser, join
+from os.path import isfile, isdir, expanduser, join, split
 from subprocess import call, STDOUT
 from multiprocessing import Pool
+from itertools import product
+import json
 import tqdm
 import re
 
@@ -29,26 +31,50 @@ def info2(text, **kwargs):
 
 FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
 
-template = '''
+JOB_NAME = "procs"
+
+TEMPLATE = '''
 define p = p b b~
 define j = p
 {proc}
-output procs/{dir_name}/
+output {job_name}/{dir_name}/
+launch
+set run_card ebeam1 {beamenergy}
+set run_card ebeam2 {beamenergy}
+set param_card yukawa 6 {yukawa}
 '''
+# set run_card etab 5
+# set run_card etal 5
 
-procs = {
+PROCS = {
     'tt_lo': 'generate p p > t t~',
     'tt_nlo': 'generate p p > t t~ [QCD]',
-    'ttw_lo': 'generate p p > t t~ w+',
-    'ttw_nlo': 'generate p p > t t~ w+ [QCD]',
+    'ttw_lo': ('generate p p > t t~ w+\n'
+               'add process p p > t t~ w-'),
+    'ttw_nlo': ('generate p p > t t~ w+ [QCD]\n'
+                'add process p p > t t~ w- [QCD]'),
     'ttz_lo': 'generate p p > t t~ z',
     'ttz_nlo': 'generate p p > t t~ z [QCD]',
     'tth_lo': 'generate p p > t t~ h',
     'tth_nlo': 'generate p p > t t~ h [QCD]',
-    'tttt_lo': 'generate p p > t t~ t t~',
-    'tttt_nlo1': 'generate p p > t t~ t t~ [QCD]',
-    'tttt_nlo2': 'generate p p > t t~ t t~ QED=99',
-    'tttt_nlo3': 'generate p p > t t~ t t~ QCD=0',
+
+    'tttt_lo_only_qcd': 'generate p p > t t~ t t~ QCD=99 QED=0',
+    'tttt_lo_only_qed': 'generate p p > t t~ t t~ QCD=0  QED=99',
+    'tttt_lo_all':      'generate p p > t t~ t t~ QCD=99 QED=99',
+
+    'gg_to_tttt_lo_only_qcd': 'generate g g > t t~ t t~ QCD=99 QED=0',
+    'gg_to_tttt_lo_only_qed': 'generate g g > t t~ t t~ QCD=0  QED=99',
+    'gg_to_tttt_lo_all':      'generate g g > t t~ t t~ QCD=99 QED=99',
+
+    'tttt_nlo': 'generate p p > t t~ t t~ [QCD]',
+    'tttt_nlo_add_qed': 'generate p p > t t~ t t~ QED=99 [QCD]',
+}
+
+notes = {
+    'tttt_lo': 'Four-top leading order, QCD diagrams only',
+    'tttt_lo_only_qed': 'Four-top leading order, QED diagrams only',
+    'tttt_lo_add_qed': 'Four-top leading order, QCD+QED diagrams',
+    'tttt_nlo': 'Four-top next-to-leading order, QCD diagrams only',
 }
 
 
@@ -77,38 +103,35 @@ def install_mg5(use_beta=False):
     info('Done!')
 
 
+def dir_name(proc_name, comenergy, yukawa):
+    if type(comenergy) is str:
+        comenergy = float(comenergy)
+    return '{proc_name}_{comenergy:.1f}TeV_{yukawa}'.format(proc_name=proc_name, comenergy=comenergy, yukawa=yukawa)
 
-def dir_name(proc_name, beamenergy):
-    if type(beamenergy) is str:
-        beamenergy = float(beamenergy)
-    return '{proc_name}_{beamenergy:.1f}TeV'.format(proc_name=proc_name, beamenergy=beamenergy)
 
-def gen_proc(args):
-    proc_name, beamenergy = args
-    log = open(dir_name(proc_name, beamenergy)+'.log', 'w')
-    dir_name_ = dir_name(proc_name, beamenergy)
-    cproc = template.format(proc=procs[proc_name], dir_name=dir_name_)
-    fname = proc_name+'.dat'
+def gen_proc(cfg):
+    # job_name, proc_name, comenergy, yukawa = args
+    dir_name_ = dir_name(cfg.proc_name, cfg.comenergy, cfg.yukawa)
+    log = open(join(JOB_NAME, dir_name_)+'.log', 'w')
+    cproc = TEMPLATE.format(proc=PROCS[cfg.proc_name], job_name=JOB_NAME, dir_name=dir_name_,
+                            beamenergy=500*cfg.comenergy, yukawa=1.73e2*cfg.yukawa)
+    fname = join(JOB_NAME, dir_name_+'.dat')
     with open(fname, 'w') as f:
         f.write(cproc)
-    sh('mkdir', ['-p', 'procs'], output=log)
-    sh('rm', ['-rf', 'procs/{dir_name}'.format(dir_name=dir_name_)], output=log)
+
+    log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV".format(cfg.proc_name, cfg.comenergy))
+    sh('rm', ['-rf', join(JOB_NAME, dir_name_)], output=log)
     sh('./MG5_aMC/bin/mg5_aMC', ['-f', fname], output=log)
-    sh('sed', ['-e', 's/.* = ebeam1/      {energy:.1f}  = ebeam1/'.format(energy=500*beamenergy), '-i',
-       'procs/{dir_name}/Cards/run_card.dat'.format(dir_name=dir_name_)], output=log)
-    sh('sed', ['-e', 's/.* = ebeam2/      {energy:.1f}  = ebeam2/'.format(energy=500*beamenergy), '-i',
-       'procs/{dir_name}/Cards/run_card.dat'.format(dir_name=dir_name_)], output=log)
-    sh('./procs/{dir_name}/bin/generate_events'.format(dir_name=dir_name_), ['-f'], output=log)
     log.close()
 
 
-def tables():
+def read_results():
     from bs4 import BeautifulSoup as Soup
-    info("Generating tables")
     class Row:
-        def __init__(self, proc, beamenergy):
+        def __init__(self, proc, comenergy, yukawa):
             self.proc = proc
-            self.beamenergy = beamenergy
+            self.comenergy = comenergy
+            self.yukawa = yukawa
             self.crossx = 'N/A'
             self.stat_err = None
             self.scale_err = None
@@ -121,9 +144,12 @@ def tables():
     cs_re = re.compile("central scheme variation: ({flt})% ({flt})%".format(flt=FLT_RE))
     pdf_re = re.compile("PDF variation: ({flt})% ({flt})%".format(flt=FLT_RE))
     rows = []
-    for fname in glob("procs/*"):
-        proc, beamenergy = re.findall(r"procs/([a-zA-Z_0-9]+)_([0-9\.]+)TeV", fname)[0]
-        row = Row(proc, beamenergy)
+    for fname in glob(JOB_NAME+"/*"):
+        if not isdir(fname):
+            continue
+        _, onlyfname = split(fname)
+        proc, comenergy, yukawa = re.findall(r"([a-zA-Z_0-9]+)_([0-9\.]+)TeV_([0-9\.]+)", onlyfname)[0]
+        row = Row(proc, comenergy, yukawa)
         try:
             with open(join(fname, 'crossx.html')) as f:
                 soup = Soup(f, 'html5lib')
@@ -131,11 +157,10 @@ def tables():
             crossx, stat_err = re.findall(r"({flt}) . ({flt})".format(flt=FLT_RE), text_raw, re.UNICODE)[0]
             row.crossx = crossx
             row.stat_err = stat_err
-            print(stat_err)
+            row.note += notes.get(proc, '')
 
             # Since MG is dumb, LO systematics are stored separately from NLO systematics
-            # ¯\_(ツ)_/¯
-            print(fname)
+            #   ¯\_(ツ)_/¯
             try:
                 # get from LO place: bottom of {proc}/Events/run_01/parton_systematics.log
                 with open(join(fname, 'Events/run_01/parton_systematics.log')) as f:
@@ -152,67 +177,121 @@ def tables():
             row.err_str += "&#177;{:s}(stat) ".format(row.stat_err)
             if row.scale_err is not None:
                 row.err_str += "<font style=\"background-color:#f1f1f1\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(scale)</font>".format(*row.scale_err)
-            if row.cs_err is not None:
-                row.err_str += "<font style=\"background-color:#ffccff\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(Central Scheme)</font>".format(*row.cs_err)
+            # if row.cs_err is not None:
+            #     row.err_str += "<font style=\"background-color:#ffccff\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(Central Scheme)</font>".format(*row.cs_err)
             if row.pdf_err is not None:
                 row.err_str += "<font style=\"background-color:#b3ffb3\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(pdf)</font>".format(*row.pdf_err)
 
         except IOError as e:
-            row.note = "Files missing"
-            raise e
+            row.note += "Files missing"
+            # raise e
         except IndexError as e:
-            row.note = "Files malformed"
-            raise e
+            row.note += "Files malformed"
+            # raise e
 
         rows.append(row)
 
-    rows.sort(key=lambda r: r.beamenergy)
+    rows.sort(key=lambda r: r.comenergy)
+    rows.sort(key=lambda r: r.yukawa)
     rows.sort(key=lambda r: r.proc)
+    return rows
+
+def gen_tables(rows):
+    info("Generating tables")
     rows_html = [("<tr><td><a href=\"{}\">{}</a></td><td>{}</td>"
-                  "<td>{}</td><td>{}</td><td>{}</td></tr>").format(dir_name(row.proc, row.beamenergy),
-                                                                   row.proc, row.beamenergy,
-                                                                   row.crossx+row.err_str, procs[row.proc], row.note) for row in rows]
-    header = "<tr><th>Process</th><th>Beam Energy</th><th>Cross-Section (pb)</th><th>Command</th><th>Note</th></tr>"
+                  "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>").format(dir_name(row.proc, row.comenergy, row.yukawa),
+                                                                              row.proc, row.comenergy, row.yukawa,
+                                                                              row.crossx+row.err_str, PROCS.get(row.proc, 'N/A'),
+                                                                              row.note) for row in rows]
+    header = "<tr><th>Process</th><th>COM Energy</th><th>Top Yukawa</th><th>Cross-Section (pb)</th><th>Command</th><th>Note</th></tr>"
     table = "<table>{}<tbody>{}</tbody><table>".format(header, '\n'.join(rows_html))
 
-    with open("summary.html", "w") as f:
+    with open(join(JOB_NAME, "summary.html"), "w") as f:
+        f.write(
+'''\
+<style>
+table {
+  border-collapse: collapse;
+}
+table, th, td {
+  border: 1px solid black;
+}
+</style>
+''')
         f.write(table)
-
     info("Done!")
+
+def gen_json(rows):
+    info("Generating json")
+
+    objs = []
+    for row in rows:
+        obj = {}
+        obj['proc'] = row.proc
+        obj['invocation'] = PROCS.get(row.proc, 'N/A')
+        obj['comenergy'] = row.comenergy
+        obj['yukawa'] = row.yukawa
+        obj['crossx'] = row.crossx
+        obj['stat_err'] = row.stat_err
+        obj['scale_err'] = row.scale_err
+        obj['cs_err'] = row.cs_err
+        obj['pdf_err'] = row.pdf_err
+        obj['note'] = row.note
+        objs.append(obj)
+    with open(join(JOB_NAME, "summary.json"), "w") as f:
+        json.dump(objs, f, indent=2)
+    info("Done!")
+
+class RunConfig:
+    def __init__(self, proc_name, comenergy, yukawa):
+        self.proc_name = proc_name
+        self.comenergy = comenergy
+        self.yukawa = yukawa
+
 
 def main(args):
     if not isdir('MG5_aMC'):
         install_mg5()
     tasks = []
     if args.all:
-        for beamenergy in args.beamenergies:
-            tasks.extend((proc_name, beamenergy) for proc_name in procs if not isdir(dir_name(proc_name, beamenergy)))
+        for comenergy, yukawa in product(args.comenergies, args.yukawas):
+            tasks.extend(RunConfig(proc_name, comenergy, yukawa) for proc_name in PROCS
+                             if not isdir(dir_name(proc_name, comenergy, yukawa)))
     elif args.processes:
-        for beamenergy in args.beamenergies:
-            tasks.extend((proc_name, beamenergy) for proc_name in args.processes if not isdir(dir_name(proc_name, beamenergy)))
+        for comenergy, yukawa in product(args.comenergies, args.yukawas):
+            tasks.extend(RunConfig(proc_name, comenergy, yukawa) for proc_name in args.processes
+                             if not isdir(dir_name(proc_name, comenergy, yukawa)))
     if tasks:
-        pool = Pool(5)
+        pool = Pool(3)
         info('Generating the following processes:')
-        for i, (proc_name, beamenergy) in enumerate(tasks):
-            info2("{:2d})  {:20s}  @ {:5.2f}TeV".format(i+1, proc_name, beamenergy))
+        for i, cfg in enumerate(tasks):
+            info2("{:2d})  {:20s}  @ {:5.2f}TeV with yt={}".format(i+1, cfg.proc_name, cfg.comenergy, cfg.yukawa))
+        info('Proceed? (Y/n)')
+        if raw_input().strip().lower() not in ('', 'y'):
+            return
+        sh('mkdir', ['-p', JOB_NAME])
         for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
             pass
 
+    found_procs = read_results()
     if args.tables:
-        tables()
+        gen_tables(found_procs)
+
+    if args.json:
+        gen_json(found_procs)
+
+    # if args.scalecard is not None:
+    #     scale_card()
 
     if args.publish:
-        info('Copying output to ~/public_html/procs')
         pubdir = join(expanduser('~'), 'public_html')
-        procdir = join(pubdir, 'procs')
+        info('Copying output to ' + pubdir)
+        procdir = join(pubdir, args.job_name)
 
         sh('rm', ['-rf', procdir])
-        sh('cp', ['-r', 'procs/', pubdir])
+        sh('cp', ['-r', args.job_name, pubdir])
 
         info('Fixing permissions...')
-        if isfile("summary.html"):
-            sh('cp', ['summary.html', procdir])
-            chmod(join(procdir, "summary.html"), 0744)
 
         chmod(procdir, 0755)
         for cwd, dirs, files in walk(procdir):
@@ -234,11 +313,16 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MG for TTTT Studies")
     add = parser.add_argument
+    add('job_name')
     add('-p', '--processes', nargs='+')
     add('--all', action='store_true')
     add('--publish', action='store_true')
     add('--tables', action='store_true')
-    add('--beamenergies', default=[13.0], type=float, nargs='+')
+    add('--json', action='store_true')
+    # add('--scalecard', type=float, nargs=2)  # lumi and then energy
+    add('--comenergies', default=[13.0], type=float, nargs='+')
+    add('--yukawas', default=[1.0], type=float, nargs="+")
 
     args = parser.parse_args()
+    JOB_NAME = args.job_name
     main(args)
