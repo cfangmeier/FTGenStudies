@@ -3,15 +3,18 @@
 from __future__ import print_function
 import argparse
 from glob import glob
-from os import rename, walk, chmod
+from os import rename, walk, chmod, mkdir
 from os.path import isfile, isdir, expanduser, join, split
+from shutil import rmtree
 from subprocess import call, STDOUT
-from multiprocessing import Pool
+from pathos.multiprocessing import Pool
 from itertools import product
 import json
+import dill
 import tqdm
 import re
 
+from utils import FLT_RE
 
 class C:
     HEADER = '\033[95m'
@@ -29,11 +32,55 @@ def info(text, **kwargs):
 def info2(text, **kwargs):
     print(C.OKGREEN+text+C.ENDC, **kwargs)
 
-FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
+NO_PROMPT = False
 
-JOB_NAME = "procs"
+def get_yes_no(prompt, default=False):
+    if NO_PROMPT:
+        return default
+    if default:
+        while True:
+            info(prompt + ' (Y/n)')
+            x = raw_input().strip().lower()
+            if x == 'n':
+                return False
+            elif x in ('', 'y'):
+                return True
+    else:
+        while True:
+            info(prompt + ' (y/N)')
+            x = raw_input().strip().lower()
+            if x == 'y':
+                return True
+            elif x in ('', 'n'):
+                return False
+
+pdgIds = {
+    'd ':  1,
+    'u ':  2,
+    's ':  3,
+    'c ':  4,
+    'b':  5,
+    't':  6,
+    'e':   11,
+    've ': 12,
+    'mu':  13,
+    'vm ': 14,
+    'ta':  15,
+    'vt ': 16,
+    'g':   21,
+    'a':   22,
+    'z':  23,
+    'w':   24,
+    'h1': 25,
+    'h2': 35,
+    'h3': 36,
+    'hc': 37,
+}
+
+RUN_NAME = "procs"
 
 TEMPLATE = '''
+import model {model}
 define p = p b b~
 define j = p
 {proc}
@@ -43,8 +90,6 @@ set run_card ebeam1 {beamenergy}
 set run_card ebeam2 {beamenergy}
 set param_card yukawa 6 {yukawa}
 '''
-# set run_card etab 5
-# set run_card etal 5
 
 PROCS = {
     'tt_lo': 'generate p p > t t~',
@@ -68,6 +113,12 @@ PROCS = {
 
     'tttt_nlo': 'generate p p > t t~ t t~ [QCD]',
     'tttt_nlo_add_qed': 'generate p p > t t~ t t~ QED=99 [QCD]',
+
+
+    # 2HDM processes
+    'tth1_lo': 'generate p p > t t~ h1',
+    'tth2_lo': 'generate p p > t t~ h2',
+    'tth3_lo': 'generate p p > t t~ h3',
 }
 
 notes = {
@@ -102,124 +153,119 @@ def install_mg5(use_beta=False):
     sh('sed', ['-e', 's/# automatic_html_opening = .*/automatic_html_opening = False/', '-i' , 'MG5_aMC/input/mg5_configuration.txt'])
     info('Done!')
 
-
-def dir_name(proc_name, comenergy, yukawa):
-    if type(comenergy) is str:
-        comenergy = float(comenergy)
-    return '{proc_name}_{comenergy:.1f}TeV_{yukawa}'.format(proc_name=proc_name, comenergy=comenergy, yukawa=yukawa)
-
-
 def gen_proc(cfg):
-    # job_name, proc_name, comenergy, yukawa = args
-    dir_name_ = dir_name(cfg.proc_name, cfg.comenergy, cfg.yukawa)
-    log = open(join(JOB_NAME, dir_name_)+'.log', 'w')
-    cproc = TEMPLATE.format(proc=PROCS[cfg.proc_name], job_name=JOB_NAME, dir_name=dir_name_,
+    log = open(join(RUN_NAME, cfg.job_name)+'.log', 'w')
+    cproc = TEMPLATE.format(proc=PROCS[cfg.proc_name], job_name=RUN_NAME, dir_name=cfg.job_name,
+                            model=cfg.model,
                             beamenergy=500*cfg.comenergy, yukawa=1.73e2*cfg.yukawa)
-    fname = join(JOB_NAME, dir_name_+'.dat')
+    for pName, mass in cfg.masses:
+        pdgId = pdgIds[pName]
+        cproc += '\nset param_card mass {} {}'.format(pdgId, mass)
+    fname = join(RUN_NAME, cfg.job_name+'.dat')
     with open(fname, 'w') as f:
         f.write(cproc)
 
-    log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV".format(cfg.proc_name, cfg.comenergy))
-    sh('rm', ['-rf', join(JOB_NAME, dir_name_)], output=log)
+    log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV\n".format(cfg.proc_name, cfg.comenergy))
+    rmtree(join(RUN_NAME, cfg.job_name), ignore_errors=True)
     sh('./MG5_aMC/bin/mg5_aMC', ['-f', fname], output=log)
     log.close()
 
 
-def read_results():
-    from bs4 import BeautifulSoup as Soup
-    class Row:
-        def __init__(self, proc, comenergy, yukawa):
-            self.proc = proc
-            self.comenergy = comenergy
-            self.yukawa = yukawa
-            self.crossx = 'N/A'
-            self.stat_err = None
-            self.scale_err = None
-            self.cs_err = None
-            self.pdf_err = None
-            self.err_str = ""
-            self.note = ""
-    scale_re = re.compile("scale variation: ({flt})% ({flt})%".format(flt=FLT_RE))
-    scale_re2 = re.compile("              {flt} pb  ({flt})% ({flt})%".format(flt=FLT_RE))
-    cs_re = re.compile("central scheme variation: ({flt})% ({flt})%".format(flt=FLT_RE))
-    pdf_re = re.compile("PDF variation: ({flt})% ({flt})%".format(flt=FLT_RE))
-    rows = []
-    for fname in glob(JOB_NAME+"/*"):
-        if not isdir(fname):
-            continue
-        _, onlyfname = split(fname)
-        proc, comenergy, yukawa = re.findall(r"([a-zA-Z_0-9]+)_([0-9\.]+)TeV_([0-9\.]+)", onlyfname)[0]
-        row = Row(proc, comenergy, yukawa)
-        try:
-            with open(join(fname, 'crossx.html')) as f:
-                soup = Soup(f, 'html5lib')
-            text_raw = soup.select("tr")[1].select("td")[3].get_text()
-            crossx, stat_err = re.findall(r"({flt}) . ({flt})".format(flt=FLT_RE), text_raw, re.UNICODE)[0]
-            row.crossx = crossx
-            row.stat_err = stat_err
-            row.note += notes.get(proc, '')
+# def read_results():
+#     from bs4 import BeautifulSoup as Soup
+#     class Row:
+#         def __init__(self, proc, comenergy, yukawa):
+#             self.proc = proc
+#             self.comenergy = comenergy
+#             self.yukawa = yukawa
+#             self.crossx = 'N/A'
+#             self.stat_err = None
+#             self.scale_err = None
+#             self.cs_err = None
+#             self.pdf_err = None
+#             self.err_str = ""
+#             self.note = ""
+#     scale_re = re.compile("scale variation: ({flt})% ({flt})%".format(flt=FLT_RE))
+#     scale_re2 = re.compile("              {flt} pb  ({flt})% ({flt})%".format(flt=FLT_RE))
+#     cs_re = re.compile("central scheme variation: ({flt})% ({flt})%".format(flt=FLT_RE))
+#     pdf_re = re.compile("PDF variation: ({flt})% ({flt})%".format(flt=FLT_RE))
+#     rows = []
+#     for fname in glob(RUN_NAME+"/*"):
+#         if not isdir(fname):
+#             continue
+#         _, onlyfname = split(fname)
+#         proc, comenergy, yukawa = re.findall(r"([a-zA-Z_0-9]+)_([0-9\.]+)TeV_([0-9\.]+)", onlyfname)[0]
+#         row = Row(proc, comenergy, yukawa)
+#         try:
+#             with open(join(fname, 'crossx.html')) as f:
+#                 soup = Soup(f, 'html5lib')
+#             text_raw = soup.select("tr")[1].select("td")[3].get_text()
+#             crossx, stat_err = re.findall(r"({flt}) . ({flt})".format(flt=FLT_RE), text_raw, re.UNICODE)[0]
+#             row.crossx = crossx
+#             row.stat_err = stat_err
+#             row.note += notes.get(proc, '')
 
-            # Since MG is dumb, LO systematics are stored separately from NLO systematics
-            #   ¯\_(ツ)_/¯
-            try:
-                # get from LO place: bottom of {proc}/Events/run_01/parton_systematics.log
-                with open(join(fname, 'Events/run_01/parton_systematics.log')) as f:
-                    txt = f.read()
-                row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re.findall(txt)[0]]
-                row.cs_err = [abs(float(s.replace(' ', ''))) for s in cs_re.findall(txt)[0]]
-                row.pdf_err = [abs(float(s.replace(' ', ''))) for s in pdf_re.findall(txt)[0]]
-            except IOError:
-                # get from NLO place: {proc}/Events/run_01/summary.txt
-                with open(join(fname, 'Events/run_01/summary.txt')) as f:
-                    txt = f.read()
-                row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re2.findall(txt)[0]]
+#             # Since MG is dumb, LO systematics are stored separately from NLO systematics
+#             #   ¯\_(ツ)_/¯
+#             try:
+#                 # get from LO place: bottom of {proc}/Events/run_01/parton_systematics.log
+#                 with open(join(fname, 'Events/run_01/parton_systematics.log')) as f:
+#                     txt = f.read()
+#                 row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re.findall(txt)[0]]
+#                 row.cs_err = [abs(float(s.replace(' ', ''))) for s in cs_re.findall(txt)[0]]
+#                 row.pdf_err = [abs(float(s.replace(' ', ''))) for s in pdf_re.findall(txt)[0]]
+#             except IOError:
+#                 # get from NLO place: {proc}/Events/run_01/summary.txt
+#                 with open(join(fname, 'Events/run_01/summary.txt')) as f:
+#                     txt = f.read()
+#                 row.scale_err = [abs(float(s.replace(' ', ''))) for s in scale_re2.findall(txt)[0]]
 
-            row.err_str += "&#177;{:s}(stat) ".format(row.stat_err)
-            if row.scale_err is not None:
-                row.err_str += "<font style=\"background-color:#f1f1f1\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(scale)</font>".format(*row.scale_err)
-            # if row.cs_err is not None:
-            #     row.err_str += "<font style=\"background-color:#ffccff\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(Central Scheme)</font>".format(*row.cs_err)
-            if row.pdf_err is not None:
-                row.err_str += "<font style=\"background-color:#b3ffb3\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(pdf)</font>".format(*row.pdf_err)
+#             row.err_str += "&#177;{:s}(stat) ".format(row.stat_err)
+#             if row.scale_err is not None:
+#                 row.err_str += "<font style=\"background-color:#f1f1f1\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(scale)</font>".format(*row.scale_err)
+#             # if row.cs_err is not None:
+#             #     row.err_str += "<font style=\"background-color:#ffccff\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(Central Scheme)</font>".format(*row.cs_err)
+#             if row.pdf_err is not None:
+#                 row.err_str += "<font style=\"background-color:#b3ffb3\"><sup>+{:g}%</sup><sub>-{:g}%</sub>(pdf)</font>".format(*row.pdf_err)
 
-        except IOError as e:
-            row.note += "Files missing"
-            # raise e
-        except IndexError as e:
-            row.note += "Files malformed"
-            # raise e
+#         except IOError as e:
+#             row.note += "Files missing"
+#             # raise e
+#         except IndexError as e:
+#             row.note += "Files malformed"
+#             # raise e
 
-        rows.append(row)
+#         rows.append(row)
 
-    rows.sort(key=lambda r: r.comenergy)
-    rows.sort(key=lambda r: r.yukawa)
-    rows.sort(key=lambda r: r.proc)
-    return rows
+#     rows.sort(key=lambda r: r.comenergy)
+#     rows.sort(key=lambda r: r.yukawa)
+#     rows.sort(key=lambda r: r.proc)
+#     return rows
 
-def gen_tables(rows):
-    info("Generating tables")
-    rows_html = [("<tr><td><a href=\"{}\">{}</a></td><td>{}</td>"
-                  "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>").format(dir_name(row.proc, row.comenergy, row.yukawa),
-                                                                              row.proc, row.comenergy, row.yukawa,
-                                                                              row.crossx+row.err_str, PROCS.get(row.proc, 'N/A'),
-                                                                              row.note) for row in rows]
-    header = "<tr><th>Process</th><th>COM Energy</th><th>Top Yukawa</th><th>Cross-Section (pb)</th><th>Command</th><th>Note</th></tr>"
-    table = "<table>{}<tbody>{}</tbody><table>".format(header, '\n'.join(rows_html))
+# def gen_tables(rows):
+#     info("Generating tables")
+#     rows_html = [("<tr><td><a href=\"{}\">{}</a></td><td>{}</td>"
+#                   "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>").format(dir_name(row.proc, row.comenergy, row.yukawa),
+#                                                                               row.proc, row.comenergy, row.yukawa,
+#                                                                               row.crossx+row.err_str, PROCS.get(row.proc, 'N/A'),
+#                                                                               row.note) for row in rows]
+#     header = "<tr><th>Process</th><th>COM Energy</th><th>Top Yukawa</th><th>Cross-Section (pb)</th><th>Command</th><th>Note</th></tr>"
+#     table = "<table>{}<tbody>{}</tbody><table>".format(header, '\n'.join(rows_html))
 
-    with open(join(JOB_NAME, "summary.html"), "w") as f:
-        f.write(
-'''\
-<style>
-table {
-  border-collapse: collapse;
-}
-table, th, td {
-  border: 1px solid black;
-}
-</style>
-''')
-        f.write(table)
-    info("Done!")
+#     with open(join(RUN_NAME, "summary.html"), "w") as f:
+#         f.write(
+# '''\
+# <style>
+# table {
+#   border-collapse: collapse;
+# }
+# table, th, td {
+#   border: 1px solid black;
+# }
+# </style>
+# ''')
+#         f.write(table)
+#     info("Done!")
 
 def gen_json(rows):
     info("Generating json")
@@ -238,50 +284,42 @@ def gen_json(rows):
         obj['pdf_err'] = row.pdf_err
         obj['note'] = row.note
         objs.append(obj)
-    with open(join(JOB_NAME, "summary.json"), "w") as f:
+    with open(join(RUN_NAME, "summary.json"), "w") as f:
         json.dump(objs, f, indent=2)
     info("Done!")
 
-class RunConfig:
-    def __init__(self, proc_name, comenergy, yukawa):
-        self.proc_name = proc_name
-        self.comenergy = comenergy
-        self.yukawa = yukawa
+class Task(object):
+    def __init__(self, **kwargs):
+        from string import letters, digits
+        legal_chars = letters + digits + '_-.'
 
+        self._setup = kwargs
+        job_name = '_'.join(str(kwargs[key]) for key in sorted(list(kwargs.keys())))
+        self.job_name = ''.join(l for l in job_name if l in legal_chars)
+        for key, val in kwargs.items():
+            setattr(self, key, val)
 
-def main(args):
+def main(tasks):
     if not isdir('MG5_aMC'):
         install_mg5()
-    tasks = []
-    if args.all:
-        for comenergy, yukawa in product(args.comenergies, args.yukawas):
-            tasks.extend(RunConfig(proc_name, comenergy, yukawa) for proc_name in PROCS
-                             if not isdir(dir_name(proc_name, comenergy, yukawa)))
-    elif args.processes:
-        for comenergy, yukawa in product(args.comenergies, args.yukawas):
-            tasks.extend(RunConfig(proc_name, comenergy, yukawa) for proc_name in args.processes
-                             if not isdir(dir_name(proc_name, comenergy, yukawa)))
+
     if tasks:
         pool = Pool(3)
         info('Generating the following processes:')
         for i, cfg in enumerate(tasks):
-            info2("{:2d})  {:20s}  @ {:5.2f}TeV with yt={}".format(i+1, cfg.proc_name, cfg.comenergy, cfg.yukawa))
-        info('Proceed? (Y/n)')
-        if raw_input().strip().lower() not in ('', 'y'):
+            info2("{:2d})  {:20s}  @ {:5.2f}TeV with ".format(i+1, cfg.proc_name, cfg.comenergy) +
+                  ', '.join('{}={}'.format(key, value) for key, value in cfg._setup.items() if key not in ('proc_name', 'comenergy')))
+        if not get_yes_no('Proceed?', True):
             return
-        sh('mkdir', ['-p', JOB_NAME])
         for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
             pass
 
-    found_procs = read_results()
-    if args.tables:
-        gen_tables(found_procs)
+    # found_procs = read_results()
+    # if args.tables:
+    #     gen_tables(found_procs)
 
-    if args.json:
-        gen_json(found_procs)
-
-    # if args.scalecard is not None:
-    #     scale_card()
+    # if args.json:
+    #     gen_json(found_procs)
 
     if args.publish:
         pubdir = join(expanduser('~'), 'public_html')
@@ -313,16 +351,49 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MG for TTTT Studies")
     add = parser.add_argument
-    add('job_name')
+    add('run_name')
     add('-p', '--processes', nargs='+')
-    add('--all', action='store_true')
     add('--publish', action='store_true')
     add('--tables', action='store_true')
     add('--json', action='store_true')
-    # add('--scalecard', type=float, nargs=2)  # lumi and then energy
+    add('--nokeep', action='store_true')
+    add('--noprompt', action='store_true')
     add('--comenergies', default=[13.0], type=float, nargs='+')
     add('--yukawas', default=[1.0], type=float, nargs="+")
+    add('--model', default='sm')
+    def mass(arg_str):
+        fst, snd = arg_str.split(':')
+        return fst, float(snd)
+    add('--mass', action='append', default=[], type=mass, metavar='NAME:MASS')
 
     args = parser.parse_args()
-    JOB_NAME = args.job_name
-    main(args)
+    NO_PROMPT = args.noprompt
+    RUN_NAME = args.run_name
+    tasks = []
+    if args.processes:
+        if isdir(RUN_NAME):
+            if args.nokeep or get_yes_no(RUN_NAME+' exists. Remove old results?'):
+                rmtree(RUN_NAME, ignore_errors=True)
+                mkdir(RUN_NAME)
+        else:
+            mkdir(RUN_NAME)
+
+        # NOTE: Update logic here to add additional configuration
+        for comenergy, yukawa in product(args.comenergies, args.yukawas):
+            tasks.extend(Task(model=args.model,
+                              proc_name=proc_name,
+                              comenergy=comenergy,
+                              yukawa=yukawa,
+                              masses=args.mass)
+                         for proc_name in args.processes)
+
+        all_tasks = {task.job_name: task for task in tasks}
+        dill_filename = join(RUN_NAME, 'batch.dill')
+        if not args.nokeep and isfile(dill_filename):
+            with open(dill_filename, 'r') as f:
+                all_tasks.update(dill.load(f))
+
+        with open(dill_filename, 'w') as f:
+            dill.dump(all_tasks, f)
+
+    main(tasks)

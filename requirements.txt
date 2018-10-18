@@ -1,2 +1,7 @@
 beautifulsoup4
 whichcraft
+tqdm
+pathos
+-e git+https://github.com/cfangmeier/matplotboard.git#egg=matplotboard
+-e git+https://github.com/cfangmeier/matplottery.git#egg=matplottery
+-e git+git@github.com:cfangmeier/pylhe.git#egg=pylhe

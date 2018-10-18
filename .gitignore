@@ -1,9 +1,11 @@
 
+CMSSW_*/
 MG5_aMC/
 procs/
 py.py
 *.log
 *.dat
+*.pyc
 
 MG5_debug
 ME5_debug
