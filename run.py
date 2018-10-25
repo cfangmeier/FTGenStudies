@@ -59,8 +59,8 @@ pdgIds = {
     'u ':  2,
     's ':  3,
     'c ':  4,
-    'b':  5,
-    't':  6,
+    'b':   5,
+    't':   6,
     'e':   11,
     've ': 12,
     'mu':  13,
@@ -69,18 +69,20 @@ pdgIds = {
     'vt ': 16,
     'g':   21,
     'a':   22,
-    'z':  23,
+    'z':   23,
     'w':   24,
-    'h1': 25,
-    'h2': 35,
-    'h3': 36,
-    'hc': 37,
+    'h':   25,
+    'h1':  25,
+    'h2':  35,
+    'a2':  36,
+    'h3':  36,
+    'hc':  37,
 }
 
 RUN_NAME = "procs"
 
 TEMPLATE = '''
-import model {model}
+import {model_type} {model}
 define p = p b b~
 define j = p
 {proc}
@@ -92,33 +94,47 @@ set param_card yukawa 6 {yukawa}
 '''
 
 PROCS = {
-    'tt_lo': 'generate p p > t t~',
-    'tt_nlo': 'generate p p > t t~ [QCD]',
-    'ttw_lo': ('generate p p > t t~ w+\n'
-               'add process p p > t t~ w-'),
-    'ttw_nlo': ('generate p p > t t~ w+ [QCD]\n'
-                'add process p p > t t~ w- [QCD]'),
-    'ttz_lo': 'generate p p > t t~ z',
-    'ttz_nlo': 'generate p p > t t~ z [QCD]',
-    'tth_lo': 'generate p p > t t~ h',
-    'tth_nlo': 'generate p p > t t~ h [QCD]',
+    # SM processes
+    'sm': {
+        'tt_lo': 'generate p p > t t~',
+        'tt_nlo': 'generate p p > t t~ [QCD]',
+        'ttw_lo': ('generate p p > t t~ w+\n'
+                   'add process p p > t t~ w-'),
+        'ttw_nlo': ('generate p p > t t~ w+ [QCD]\n'
+                    'add process p p > t t~ w- [QCD]'),
+        'ttz_lo': 'generate p p > t t~ z',
+        'ttz_nlo': 'generate p p > t t~ z [QCD]',
+        'tth_lo': 'generate p p > t t~ h',
+        'tth_nlo': 'generate p p > t t~ h [QCD]',
 
-    'tttt_lo_only_qcd': 'generate p p > t t~ t t~ QCD=99 QED=0',
-    'tttt_lo_only_qed': 'generate p p > t t~ t t~ QCD=0  QED=99',
-    'tttt_lo_all':      'generate p p > t t~ t t~ QCD=99 QED=99',
+        'tttt_lo_only_qcd': 'generate p p > t t~ t t~ QCD=99 QED=0',
+        'tttt_lo_only_qed': 'generate p p > t t~ t t~ QCD=0  QED=99',
+        'tttt_lo_all':      'generate p p > t t~ t t~ QCD=99 QED=99',
 
-    'gg_to_tttt_lo_only_qcd': 'generate g g > t t~ t t~ QCD=99 QED=0',
-    'gg_to_tttt_lo_only_qed': 'generate g g > t t~ t t~ QCD=0  QED=99',
-    'gg_to_tttt_lo_all':      'generate g g > t t~ t t~ QCD=99 QED=99',
+        'gg_to_tttt_lo_only_qcd': 'generate g g > t t~ t t~ QCD=99 QED=0',
+        'gg_to_tttt_lo_only_qed': 'generate g g > t t~ t t~ QCD=0  QED=99',
+        'gg_to_tttt_lo_all':      'generate g g > t t~ t t~ QCD=99 QED=99',
 
-    'tttt_nlo': 'generate p p > t t~ t t~ [QCD]',
-    'tttt_nlo_add_qed': 'generate p p > t t~ t t~ QED=99 [QCD]',
+        'tttt_nlo': 'generate p p > t t~ t t~ [QCD]',
+        'tttt_nlo_add_qed': 'generate p p > t t~ t t~ QED=99 [QCD]',
 
-
+        'tthbb_lo': 'generate p p > t t~ h, h > b b~',
+    },
     # 2HDM processes
-    'tth1_lo': 'generate p p > t t~ h1',
-    'tth2_lo': 'generate p p > t t~ h2',
-    'tth3_lo': 'generate p p > t t~ h3',
+    '2HDM': {
+        'tth1_lo': 'generate p p > t t~ h1',
+        'tth2_lo': 'generate p p > t t~ h2',
+        'tth3_lo': 'generate p p > t t~ h3',
+
+        'tthxbb_lo': ('generate p p > t t~ h1, h1 > b b~\n'
+                      'add process p p > t t~ h2, h2 > b b~'),
+    },
+    # s4top_v4 processes
+    "s4top_v4": {
+        'tth_lo': 'generate p p > t t~ h',
+        'tth2_lo': 'generate p p > t t~ h2',
+        'tta2_lo': 'generate p p > t t~ a2',
+    },
 }
 
 notes = {
@@ -155,7 +171,11 @@ def install_mg5(use_beta=False):
 
 def gen_proc(cfg):
     log = open(join(RUN_NAME, cfg.job_name)+'.log', 'w')
-    cproc = TEMPLATE.format(proc=PROCS[cfg.proc_name], job_name=RUN_NAME, dir_name=cfg.job_name,
+    model_type = "model"
+    if cfg.model[-3:] == "_v4":
+        model_type += "_v4"
+    cproc = TEMPLATE.format(proc=PROCS[cfg.model][cfg.proc_name], job_name=RUN_NAME, dir_name=cfg.job_name,
+                            model_type=model_type,
                             model=cfg.model,
                             beamenergy=500*cfg.comenergy, yukawa=1.73e2*cfg.yukawa)
     for pName, mass in cfg.masses:
@@ -324,10 +344,10 @@ def main(tasks):
     if args.publish:
         pubdir = join(expanduser('~'), 'public_html')
         info('Copying output to ' + pubdir)
-        procdir = join(pubdir, args.job_name)
+        procdir = join(pubdir, args.run_name)
 
         sh('rm', ['-rf', procdir])
-        sh('cp', ['-r', args.job_name, pubdir])
+        sh('cp', ['-r', args.run_name, pubdir])
 
         info('Fixing permissions...')
 

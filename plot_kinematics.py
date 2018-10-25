@@ -4,6 +4,7 @@ from __future__ import print_function
 import argparse
 import sys
 from os.path import join
+from collections import defaultdict
 
 import matplotlib
 matplotlib.use('Agg')
@@ -127,6 +128,67 @@ def make_plots(build=False, publish=False):
         mpb.publish()
 
 
+def report():
+
+    const_h1s = []
+    const_h2s = []
+    for task in TASKS.values():
+        xs = read_cross_section(RUN_NAME, task)
+        if task.proc_name == 'tth1_lo' and read_param(RUN_NAME, task, 'MASS', 25) == 125:
+            m = read_param(RUN_NAME, task, 'MASS', 35)
+            const_h1s.append((m, xs))
+        if task.proc_name == 'tth2_lo' and read_param(RUN_NAME, task, 'MASS', 35) == 125:
+            m = read_param(RUN_NAME, task, 'MASS', 25)
+            const_h2s.append((m, xs))
+
+    const_h1s.sort()
+    const_h2s.sort()
+
+    for m, xs in const_h1s:
+        print(m, xs[0])
+    print()
+    for m, xs in const_h2s:
+        print(m, xs[0])
+
+    print('SM')
+    for task in TASKS.values():
+        if task.proc_name == 'tth_lo':
+            print(read_cross_section(RUN_NAME, task))
+            break
+
+    print('h1 + h2')
+    h1h2 = 0
+    h = 0
+    for task in TASKS.values():
+        if task.proc_name == 'tthxbb_lo':
+            h1h2 = read_cross_section(RUN_NAME, task)
+        elif task.proc_name == 'tthbb_lo':
+            h = read_cross_section(RUN_NAME, task)
+    print('h1+h2', h1h2)
+    print('sm h', h)
+
+    print('ratios')
+    pairs = defaultdict(dict)
+    for task in TASKS.values():
+        xs = read_cross_section(RUN_NAME, task)
+        try:
+            m1 = read_param(RUN_NAME, task, 'MASS', 25)
+            m2 = read_param(RUN_NAME, task, 'MASS', 35)
+        except:
+            continue
+        if m1 != m2:
+            continue
+        if task.proc_name == 'tth1_lo':
+            pairs[m1]['h1'] = xs
+        elif task.proc_name == 'tth2_lo':
+            pairs[m1]['h2'] = xs
+    for mass, xss in pairs.items():
+        if len(xss) == 2:
+            h1 = xss['h1'][0]
+            h2 = xss['h2'][0]
+            print('{:10.4f} {:10.4f} {:10.4f} {:10.4f}'.format(mass, h1, h2, h1/h2))
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run MG for TTTT Studies')
@@ -134,6 +196,8 @@ if __name__ == '__main__':
     add('run_name')
     add('--publish', action='store_true')
     add('--build', action='store_true')
+    add('--listtasks', action='store_true')
+    add('--report', action='store_true')
 
     args = parser.parse_args()
 
@@ -148,5 +212,11 @@ if __name__ == '__main__':
 
     RUN_NAME = args.run_name
     read_tasks()
-    fill_hists()
+    if args.report:
+        report()
+    if args.listtasks:
+        for i, task in enumerate(TASKS.values()):
+            print('{}) '.format(i), task.job_name)
+    if args.build:
+        fill_hists()
     make_plots(build=args.build, publish=args.publish)
