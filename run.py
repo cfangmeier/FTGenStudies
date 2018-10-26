@@ -1,6 +1,10 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import print_function
+
+from sys import version_info
+PY3 = version_info.major == 3
+
 import argparse
 from glob import glob
 from os import rename, walk, chmod, mkdir
@@ -13,6 +17,9 @@ import json
 import dill
 import tqdm
 import re
+
+if not PY3:
+    input = raw_input
 
 from utils import FLT_RE
 
@@ -40,7 +47,7 @@ def get_yes_no(prompt, default=False):
     if default:
         while True:
             info(prompt + ' (Y/n)')
-            x = raw_input().strip().lower()
+            x = input().strip().lower()
             if x == 'n':
                 return False
             elif x in ('', 'y'):
@@ -48,7 +55,7 @@ def get_yes_no(prompt, default=False):
     else:
         while True:
             info(prompt + ' (y/N)')
-            x = raw_input().strip().lower()
+            x = input().strip().lower()
             if x == 'y':
                 return True
             elif x in ('', 'n'):
@@ -74,7 +81,6 @@ pdgIds = {
     'h':   25,
     'h1':  25,
     'h2':  35,
-    'a2':  36,
     'h3':  36,
     'hc':  37,
 }
@@ -90,6 +96,7 @@ output {job_name}/{dir_name}/
 launch
 set run_card ebeam1 {beamenergy}
 set run_card ebeam2 {beamenergy}
+set run_card nevents 10000
 set param_card yukawa 6 {yukawa}
 '''
 
@@ -133,7 +140,21 @@ PROCS = {
     "s4top_v4": {
         'tth_lo': 'generate p p > t t~ h',
         'tth2_lo': 'generate p p > t t~ h2',
-        'tta2_lo': 'generate p p > t t~ a2',
+        'tth3_lo': 'generate p p > t t~ h3',
+
+        'tthtt_lo': 'generate p p > t t~ h, h > t t~',
+        'tth2tt_lo': 'generate p p > t t~ h2, h2 > t t~',
+        'tth3tt_lo': 'generate p p > t t~ h3, h3 > t t~',
+    },
+    # 2HDMtII_NLO processes
+    "2HDMtII_NLO": {
+        'tth1_lo': 'generate p p > t t~ h1',
+        'tth2_lo': 'generate p p > t t~ h2',
+        'tth3_lo': 'generate p p > t t~ h3',
+
+        'tth1tt_lo': 'generate p p > t t~ h1, h1 > t t~',
+        'tth2tt_lo': 'generate p p > t t~ h2, h2 > t t~',
+        'tth3tt_lo': 'generate p p > t t~ h3, h3 > t t~',
     },
 }
 
@@ -153,6 +174,7 @@ def sh(cmd, args, output=None):
     if retval:
         raise RuntimeError('command failed to run(' + str(retval) + '): ' + str(cmd) + ' ' + str(args))
 
+
 def install_mg5(use_beta=False):
     info('Installing Madgraph')
     if use_beta:
@@ -169,12 +191,26 @@ def install_mg5(use_beta=False):
     sh('sed', ['-e', 's/# automatic_html_opening = .*/automatic_html_opening = False/', '-i' , 'MG5_aMC/input/mg5_configuration.txt'])
     info('Done!')
 
+
+def install_models():
+    info('Installing Models')
+    for i, model in enumerate(glob('models/*.zip')):
+        info2('{})  {}'.format(i, model))
+        # mkdir(join('MG5_amC', model[:-4]))
+        sh('tar', ['-xzf', model, '-C', 'MG5_aMC/models'])
+
+
 def gen_proc(cfg):
     log = open(join(RUN_NAME, cfg.job_name)+'.log', 'w')
     model_type = "model"
     if cfg.model[-3:] == "_v4":
         model_type += "_v4"
-    cproc = TEMPLATE.format(proc=PROCS[cfg.model][cfg.proc_name], job_name=RUN_NAME, dir_name=cfg.job_name,
+    try:
+        proc = PROCS[cfg.model][cfg.proc_name]
+    except KeyError:
+        print("Error: Unkown process '{}' for model '{}'".format(cfg.proc_name, cfg.model))
+        return
+    cproc = TEMPLATE.format(proc=proc, job_name=RUN_NAME, dir_name=cfg.job_name,
                             model_type=model_type,
                             model=cfg.model,
                             beamenergy=500*cfg.comenergy, yukawa=1.73e2*cfg.yukawa)
@@ -310,7 +346,11 @@ def gen_json(rows):
 
 class Task(object):
     def __init__(self, **kwargs):
-        from string import letters, digits
+        if PY3:
+            from string import ascii_letters as letters
+        else:
+            from string import letters
+        from string import digits
         legal_chars = letters + digits + '_-.'
 
         self._setup = kwargs
@@ -322,6 +362,7 @@ class Task(object):
 def main(tasks):
     if not isdir('MG5_aMC'):
         install_mg5()
+        install_models()
 
     if tasks:
         pool = Pool(3)
@@ -351,18 +392,18 @@ def main(tasks):
 
         info('Fixing permissions...')
 
-        chmod(procdir, 0755)
+        chmod(procdir, 0o755)
         for cwd, dirs, files in walk(procdir):
             for dir_ in dirs:
                 path = join(cwd, dir_)
                 try:
-                    chmod(path, 0755)
+                    chmod(path, 0o755)
                 except OSError:
                     pass
             for file_ in files:
                 path = join(cwd, file_)
                 try:
-                    chmod(path, 0744)
+                    chmod(path, 0o744)
                 except OSError:
                     pass
         info('Done!')
@@ -381,6 +422,7 @@ if __name__ == "__main__":
     add('--comenergies', default=[13.0], type=float, nargs='+')
     add('--yukawas', default=[1.0], type=float, nargs="+")
     add('--model', default='sm')
+
     def mass(arg_str):
         fst, snd = arg_str.split(':')
         return fst, float(snd)
@@ -410,10 +452,10 @@ if __name__ == "__main__":
         all_tasks = {task.job_name: task for task in tasks}
         dill_filename = join(RUN_NAME, 'batch.dill')
         if not args.nokeep and isfile(dill_filename):
-            with open(dill_filename, 'r') as f:
+            with open(dill_filename, 'rb') as f:
                 all_tasks.update(dill.load(f))
 
-        with open(dill_filename, 'w') as f:
+        with open(dill_filename, 'wb') as f:
             dill.dump(all_tasks, f)
 
     main(tasks)

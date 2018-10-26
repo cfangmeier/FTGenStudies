@@ -20,10 +20,12 @@ HISTS = {}
 
 RUN_NAME = "procs"
 
+
 def get_label(task):
     h1_mass = read_param(RUN_NAME, task, 'MASS', 25)
     h2_mass = read_param(RUN_NAME, task, 'MASS', 35)
     return "$M_h={:.1f}, M_H={:.1f}$".format(h1_mass, h2_mass)
+
 
 def hist_plot(h, include_errors=False, line_width=1, **kwargs):
 
@@ -50,74 +52,100 @@ def read_tasks():
     with open(join(RUN_NAME, 'batch.dill'), 'r') as f:
         TASKS = load(f)
 
+
 def fill_hists():
     import gzip
     from pylhe import readLHE
 
-    pt_bins = np.linspace(0, 1500, 10, endpoint=True)
-    eta_bins = np.linspace(-7, 7, 10, endpoint=True)
-    phi_bins = np.linspace(-3.14159, 3.14159, 10, endpoint=True)
+    pt_bins = np.linspace(0, 1500, 40, endpoint=True)
+    p_bins = np.linspace(0, 1500, 40, endpoint=True)
+    eta_bins = np.linspace(-7, 7, 40, endpoint=True)
+    phi_bins = np.linspace(-3.14159, 3.14159, 40, endpoint=True)
 
     for task in TASKS.values():
         filename = join(RUN_NAME, task.job_name, 'Events', 'run_01', 'unweighted_events.lhe.gz')
         top_pt = []
         top_eta = []
         top_phi = []
+        top_p = []
         higgs_pt = []
         higgs_eta = []
         higgs_phi = []
+        higgs_p = []
         with gzip.open(filename, 'r') as f:
             events = readLHE(f)
             for i, event in enumerate(events):
                 for p in event.particles:
                     if abs(p.id) == 6:
+                        # print('top', p)
                         top_pt.append(p.pt)
                         top_eta.append(p.eta)
                         top_phi.append(p.phi)
-                    elif abs(p.id) in (25, 35):
+                        top_p.append(p.p)
+                    elif abs(p.id) in (25, 35, 36):
                         higgs_pt.append(p.pt)
                         higgs_eta.append(p.eta)
                         higgs_phi.append(p.phi)
+                        higgs_p.append(p.p)
                 # if i > 1000: break
         HISTS[(task.job_name, 'top_pt')] = Hist1D(top_pt, bins=pt_bins)
         HISTS[(task.job_name, 'top_eta')] = Hist1D(top_eta, bins=eta_bins)
         HISTS[(task.job_name, 'top_phi')] = Hist1D(top_phi, bins=phi_bins)
+        HISTS[(task.job_name, 'top_p')] = Hist1D(top_p, bins=p_bins)
 
         HISTS[(task.job_name, 'higgs_pt')] = Hist1D(higgs_pt, bins=pt_bins)
         HISTS[(task.job_name, 'higgs_eta')] = Hist1D(higgs_eta, bins=eta_bins)
         HISTS[(task.job_name, 'higgs_phi')] = Hist1D(higgs_phi, bins=phi_bins)
+        HISTS[(task.job_name, 'higgs_p')] = Hist1D(higgs_p, bins=p_bins)
+
+        for k, h in HISTS.items():
+            HISTS[k] = h / h.integral
+
 
 @mpb.decl_fig
-def multiplot(tasks, plot_name, proc_name=None):
+def multiplot(tasks, plot_name):
 
-    rows = []
-    row_labels = []
+    # rows = []
+    # row_labels = []
+    labels = {
+        'tth1tt_lo': 'p p > t t~ h1, h1 > t t~',
+        'tth2tt_lo': 'p p > t t~ h2, h2 > t t~',
+        'tth3tt_lo': 'p p > t t~ h3, h3 > t t~',
+    }
     for task in tasks.values():
-        if proc_name and task.proc_name != proc_name:
-            continue
-        label = get_label(task)
-        hist_plot(HISTS[(task.job_name, plot_name)], label=label)
-        cross_section, error = read_cross_section(RUN_NAME, task)
-        rows.append([read_param(RUN_NAME, task, 'MASS', 25),
-                     read_param(RUN_NAME, task, 'MASS', 35),
-                     '{}+-{}'.format(cross_section, error)])
-        row_labels.append(task.proc_name)
+    # for proc_name in ['tthtt_lo', 'tth2tt_lo', 'tth3tt_lo']:
+        # if proc_name and task.proc_name != proc_name:
+        #     continue
+        # label = get_label(task)
+        label = labels.get(task.proc_name, task.proc_name)
+        h = HISTS[(task.job_name, plot_name)]
+        # print(h.integral)
+        hist_plot(h, label=label, include_errors=True)
+        # cross_section, error = read_cross_section(RUN_NAME, task)
+        # rows.append([read_param(RUN_NAME, task, 'MASS', 25),
+        #              read_param(RUN_NAME, task, 'MASS', 35),
+        #              read_param(RUN_NAME, task, 'MASS', 36),
+        #              '{}+-{}'.format(cross_section, error)])
+        # row_labels.append(task.proc_name)
     plt.legend()
-    plt.ylim((0,None))
-    return to_html_table(rows, ['', '$m_h$ (GeV)', '$m_H$ (GeV)', r'$\sigma$ (pb)'], row_labels, 'table-condensed')
+    plt.ylim((0, None))
+    # return to_html_table(rows, ['', '$m_h$', '$m_H$', '$m_A$', r'$\sigma$ (pb)'],
+    #                      row_labels, 'table-condensed')
 
 
 def make_plots(build=False, publish=False):
 
     figures = {}
-    for proc_name in ['tth1_lo', 'tth2_lo']:
-        figures['top_pt_'+proc_name] = multiplot(TASKS, 'top_pt', proc_name)
-        figures['top_eta_'+proc_name] = multiplot(TASKS, 'top_eta', proc_name)
-        figures['top_phi_'+proc_name] = multiplot(TASKS, 'top_phi', proc_name)
+    # for proc_name in ['tthtt_lo', 'tth2tt_lo', 'tth3tt_lo']:
+    figures['top_pt'] = multiplot(TASKS, 'top_pt')
+    figures['top_eta'] = multiplot(TASKS, 'top_eta')
+    figures['top_phi'] = multiplot(TASKS, 'top_phi')
+    figures['top_p'] = multiplot(TASKS, 'top_p')
 
-        figures['higgs_pt_'+proc_name] = multiplot(TASKS, 'higgs_pt', proc_name)
-        figures['higgs_eta_'+proc_name] = multiplot(TASKS, 'higgs_eta', proc_name)
-        figures['higgs_phi_'+proc_name] = multiplot(TASKS, 'higgs_phi', proc_name)
+    figures['higgs_pt'] = multiplot(TASKS, 'higgs_pt')
+    figures['higgs_eta'] = multiplot(TASKS, 'higgs_eta')
+    figures['higgs_phi'] = multiplot(TASKS, 'higgs_phi')
+    figures['higgs_p'] = multiplot(TASKS, 'higgs_p')
 
     mpb.render(figures, build=build)
     mpb.generate_report(figures, '2HDM Studies',
@@ -202,10 +230,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     from os.path import expanduser
+    # mpb.configure(output_dir='ft_gen_kinematics',
+    #               multiprocess=False,
+    #               publish_remote="local",
+    #               publish_dir=expanduser("~/public_html/FT/"),
+    #               publish_url="t3.unl.edu/~cfangmeier/FT/",
+    #               early_abort=True,
+    #               )
     mpb.configure(output_dir='ft_gen_kinematics',
                   multiprocess=False,
-                  publish_remote="local",
-                  publish_dir=expanduser("~/public_html/FT/"),
+                  publish_remote="cfangmeier@t3.unl.edu",
+                  publish_dir="~/public_html/FT/",
                   publish_url="t3.unl.edu/~cfangmeier/FT/",
                   early_abort=True,
                   )
@@ -216,7 +251,7 @@ if __name__ == '__main__':
         report()
     if args.listtasks:
         for i, task in enumerate(TASKS.values()):
-            print('{}) '.format(i), task.job_name)
+            print('{}) '.format(i), task.proc_name)
     if args.build:
         fill_hists()
     make_plots(build=args.build, publish=args.publish)
