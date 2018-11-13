@@ -3,26 +3,29 @@
 from __future__ import print_function
 import argparse
 import sys
-from os.path import join
+from os.path import join, isfile, realpath
 from collections import defaultdict
 
+import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import pandas as pd
+
 import matplotboard as mpb
 from matplottery.utils import Hist1D, to_html_table
 from lhe2sqlite import convert
-from utils import read_cross_section, read_param, pdgIds
 
-import numpy as np
+from utils import read_cross_section, read_param, pdgIds
 
 TASKS = {}
 HISTS = {}
 
 RUN_NAME = "procs"
 
-PT_BINS = np.linspace(0, 1500, 10, endpoint=True)
-ETA_BINS = np.linspace(-7, 7, 10, endpoint=True)
+PT_BINS = np.linspace(0, 1500, 20, endpoint=True)
+ETA_BINS = np.linspace(-7, 7, 20, endpoint=True)
+
 
 def get_label(task):
     h1_mass = read_param(RUN_NAME, task, 'MASS', 25)
@@ -55,27 +58,25 @@ def read_tasks():
     with open(join(RUN_NAME, 'batch.dill'), 'r') as f:
         TASKS = load(f)
 
-def fill_hists(max_events=0):
-    import gzip
-    from pylhe import readLHE
 
+def fill_hists():
     for task in TASKS.values():
+        print('loading task', task.job_name)
         filename = join(RUN_NAME, task.job_name, 'Events', 'run_01', 'unweighted_events.lhe.gz')
-        sql_filename = filename[:-6]+'.sqlite3'
+        sql_filename = realpath(filename[:-7]+'.sqlite3')
         if not isfile(sql_filename):
+            print('converting', filename, '->', sql_filename)
             convert(filename, sql_filename)
-        top_pt = []
-        top_eta = []
-        with gzip.open(filename, 'r') as f:
-            for i, event in enumerate(readLHE(f)):
-                if max_events and i >= max_events: break
-                for p in event.particles:
-                    if abs(p.id) == 6:
-                        # print('top', p)
-                        top_pt.append(p.pt)
-                        top_eta.append(p.eta)
-        HISTS[(task, 'top_pt')] = Hist1D(top_pt, bins=PT_BINS)
-        HISTS[(task, 'top_eta')] = Hist1D(top_eta, bins=ETA_BINS)
+
+        df = pd.read_sql_query(('select px, py, pz from particle '
+                                'where abs(pdgid)==6 and abs(status)==1'),
+                               'sqlite:///'+sql_filename)
+        df['pt'] = np.sqrt(df['px']**2 + df['py']**2)
+        df['p'] = np.sqrt(df['px']**2 + df['py']**2 + df['pz']**2)
+        df['eta'] = np.arctanh(df['pz'] / df['p'])
+
+        HISTS[(task, 'top_pt')] = Hist1D(np.array(df['pt']), bins=PT_BINS)
+        HISTS[(task, 'top_eta')] = Hist1D(np.array(df['eta']), bins=ETA_BINS)
 
         for k, h in HISTS.items():
             HISTS[k] = h / h.integral
@@ -130,7 +131,11 @@ def zp_xs_v_gt():
     plt.xlim((0, 2))
     plt.xlabel('$g_{tZ\'}$', fontsize='xx-large')
     plt.ylabel(r'$\sigma_{NP+SM} / \sigma_{SM}(pp \rightarrow t\bar{t}t\bar{t})$', fontsize='xx-large')
+    plt.yticks([1, 2, 3, 4, 5, 6, 7, 8])
+    plt.xticks([0, 0.5, 1.0, 1.5, 2.0])
     plt.minorticks_on()
+    plt.grid(which='minor', alpha=0.5)
+    plt.grid(which='major')
     # plt.legend()
     labelLines(plt.gca().get_lines(),
                zorder=2.5,
@@ -138,46 +143,38 @@ def zp_xs_v_gt():
                xvals=(0.12, 1.15),
                )
 
+
 @mpb.decl_fig
-def zp_kinem_v_m(gt=0.1):
-    m_edges = [12.5, 37.5, 62.5, 87.5, 112.5, 137.5]
-    pt_xs, pt_ys = np.meshgrid(PT_BINS, m_edges)
-    # eta_xs, eta_ys = np.meshgrid(ETA_BINS, m_edges)
-    # pt_vals = np.zeros((len(PT_BINS)-1,len(m_edges)-1), float)
-    pt_vals = np.zeros((len(m_edges)-1, len(PT_BINS)-1), float)
-
-
+def zp_kinem_v_m(gt=0.1, var='pt'):
     for idx, mass in enumerate([25, 50, 75, 100, 125]):
         for task in TASKS.values():
             zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
             task_gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
-            if zp_mass != mass or task_gt != gt: continue
-            pt_dist = HISTS[(task, 'top_pt')]
-            pt_dist = pt_dist / pt_dist.integral
-            for i in range(len(PT_BINS)-1):
-                pt_vals[idx, i] = pt_dist.counts[i]
-            break
-    plt.pcolormesh(pt_xs, pt_ys, pt_vals)
+            if zp_mass == mass and task_gt == gt:
+                dist = HISTS[(task, 'top_'+var)]
+                hist_plot(dist,
+                          label='$M_{Z\'}$='+str(mass)+'GeV',
+                          include_errors=True, alpha=0.75)
+                break
+    plt.legend(loc='upper right')
+    if var == 'pt':
+        plt.ylim((0, 0.4))
+        plt.xlabel(r'$p_T$', fontsize='xx-large')
+    else:  # eta
+        plt.ylim((0, 0.25))
+        plt.xlabel(r'$\eta$', fontsize='xx-large')
+    plt.text(0.1, 0.3, '$g_t={}$'.format(gt), transform=plt.gca().transAxes)
 
 
 def make_plots(build=False, publish=False):
 
     figures = {}
-    # for proc_name in ['tttt_lo']:
-    #     figures['top_pt_'+proc_name] = multiplot(TASKS, 'top_pt', proc_name)
-    #     figures['top_eta_'+proc_name] = multiplot(TASKS, 'top_eta', proc_name)
-        # figures['top_phi_'+proc_name] = multiplot(TASKS, 'top_phi', proc_name)
 
-        # figures['higgs_pt_'+proc_name] = multiplot(TASKS, 'higgs_pt', proc_name)
-        # figures['higgs_eta_'+proc_name] = multiplot(TASKS, 'higgs_eta', proc_name)
-        # figures['higgs_phi_'+proc_name] = multiplot(TASKS, 'higgs_phi', proc_name)
-
-    # figures['zp_xs_v_gt'] = zp_xs_v_gt()
-    figures['zp_kinem_v_m_0p1'] = zp_kinem_v_m(0.1)
-    figures['zp_kinem_v_m_0p2'] = zp_kinem_v_m(0.2)
-    figures['zp_kinem_v_m_0p3'] = zp_kinem_v_m(0.3)
-    figures['zp_kinem_v_m_0p4'] = zp_kinem_v_m(0.4)
-    figures['zp_kinem_v_m_0p5'] = zp_kinem_v_m(0.5)
+    figures['zp_xs_v_gt'] = zp_xs_v_gt()
+    for var in ['pt', 'eta']:
+        for gt in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+            gt_s = '{:.1f}'.format(gt).replace('.', 'p')
+            figures['top_{}_v_m_{}'.format(var, gt_s)] = zp_kinem_v_m(gt, var)
 
     mpb.render(figures, build=build)
     mpb.generate_report(figures, '2HDM Studies',
@@ -268,7 +265,7 @@ if __name__ == '__main__':
     #               publish_url="t3.unl.edu/~cfangmeier/FT/",
     #               early_abort=True,
     #               )
-    mpb.configure(output_dir='ft_gen_kinematics',
+    mpb.configure(output_dir='z_prime_studies/',
                   multiprocess=False,
                   publish_remote="cfangmeier@t3.unl.edu",
                   publish_dir="~/public_html/FT/",
