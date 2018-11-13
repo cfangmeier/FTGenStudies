@@ -11,7 +11,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotboard as mpb
 from matplottery.utils import Hist1D, to_html_table
-from utils import read_cross_section, read_param
+from lhe2sqlite import convert
+from utils import read_cross_section, read_param, pdgIds
 
 import numpy as np
 
@@ -19,6 +20,9 @@ TASKS = {}
 HISTS = {}
 
 RUN_NAME = "procs"
+
+PT_BINS = np.linspace(0, 1500, 10, endpoint=True)
+ETA_BINS = np.linspace(-7, 7, 10, endpoint=True)
 
 def get_label(task):
     h1_mass = read_param(RUN_NAME, task, 'MASS', 25)
@@ -50,42 +54,38 @@ def read_tasks():
     with open(join(RUN_NAME, 'batch.dill'), 'r') as f:
         TASKS = load(f)
 
-def fill_hists():
+def fill_hists(max_events=0):
     import gzip
     from pylhe import readLHE
 
-    pt_bins = np.linspace(0, 1500, 10, endpoint=True)
-    eta_bins = np.linspace(-7, 7, 10, endpoint=True)
-    phi_bins = np.linspace(-3.14159, 3.14159, 10, endpoint=True)
-
     for task in TASKS.values():
         filename = join(RUN_NAME, task.job_name, 'Events', 'run_01', 'unweighted_events.lhe.gz')
+        sql_filename = filename[:-6]+'.sqlite3'
+        if not isfile(sql_filename):
+            convert(filename, sql_filename)
         top_pt = []
         top_eta = []
-        top_phi = []
-        higgs_pt = []
-        higgs_eta = []
-        higgs_phi = []
+        # top_phi = []
+        # higgs_pt = []
+        # higgs_eta = []
+        # higgs_phi = []
         with gzip.open(filename, 'r') as f:
-            events = readLHE(f)
-            for i, event in enumerate(events):
+            for i, event in enumerate(readLHE(f)):
+                if max_events and i >= max_events: break
                 for p in event.particles:
                     if abs(p.id) == 6:
                         top_pt.append(p.pt)
                         top_eta.append(p.eta)
-                        top_phi.append(p.phi)
-                    elif abs(p.id) in (25, 35):
-                        higgs_pt.append(p.pt)
-                        higgs_eta.append(p.eta)
-                        higgs_phi.append(p.phi)
-                # if i > 1000: break
-        HISTS[(task.job_name, 'top_pt')] = Hist1D(top_pt, bins=pt_bins)
-        HISTS[(task.job_name, 'top_eta')] = Hist1D(top_eta, bins=eta_bins)
-        HISTS[(task.job_name, 'top_phi')] = Hist1D(top_phi, bins=phi_bins)
+                        # top_phi.append(p.phi)
+                    # elif abs(p.id) in (25, 35):
+                    #     higgs_pt.append(p.pt)
+                    #     higgs_eta.append(p.eta)
+                    #     higgs_phi.append(p.phi)
+        HISTS[(task, 'top_pt')] = Hist1D(top_pt, bins=PT_BINS)
+        HISTS[(task, 'top_eta')] = Hist1D(top_eta, bins=ETA_BINS)
 
-        HISTS[(task.job_name, 'higgs_pt')] = Hist1D(higgs_pt, bins=pt_bins)
-        HISTS[(task.job_name, 'higgs_eta')] = Hist1D(higgs_eta, bins=eta_bins)
-        HISTS[(task.job_name, 'higgs_phi')] = Hist1D(higgs_phi, bins=phi_bins)
+        # HISTS[(task.job_name, 'higgs_pt')] = Hist1D(higgs_pt, bins=PT_BINS)
+        # HISTS[(task.job_name, 'higgs_eta')] = Hist1D(higgs_eta, bins=ETA_BINS)
 
 @mpb.decl_fig
 def multiplot(tasks, plot_name, proc_name=None):
@@ -95,29 +95,91 @@ def multiplot(tasks, plot_name, proc_name=None):
     for task in tasks.values():
         if proc_name and task.proc_name != proc_name:
             continue
-        label = get_label(task)
+        # label = get_label(task)
+        label = str(id(task))
         hist_plot(HISTS[(task.job_name, plot_name)], label=label)
         cross_section, error = read_cross_section(RUN_NAME, task)
-        rows.append([read_param(RUN_NAME, task, 'MASS', 25),
-                     read_param(RUN_NAME, task, 'MASS', 35),
-                     '{}+-{}'.format(cross_section, error)])
-        row_labels.append(task.proc_name)
+        # rows.append([read_param(RUN_NAME, task, 'MASS', 25),
+        #              read_param(RUN_NAME, task, 'MASS', 35),
+        #              '{}+-{}'.format(cross_section, error)])
+        # row_labels.append(task.proc_name)
     plt.legend()
     plt.ylim((0,None))
-    return to_html_table(rows, ['', '$m_h$ (GeV)', '$m_H$ (GeV)', r'$\sigma$ (pb)'], row_labels, 'table-condensed')
+    # return to_html_table(rows, ['', '$m_h$ (GeV)', '$m_H$ (GeV)', r'$\sigma$ (pb)'], row_labels, 'table-condensed')
+
+
+@mpb.decl_fig
+def zp_xs_v_gt():
+    from labellines import labelLines
+    mass_sets = defaultdict(list)
+    sm_val = 0
+    for task in TASKS.values():
+        zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
+        gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
+        xs = read_cross_section(RUN_NAME, task)
+        mass_sets[zp_mass].append((gt, xs[0]))
+        if gt == 0:
+            sm_val = xs[0]
+    masses = sorted(mass_sets.keys())
+    for zp_mass in masses:
+        points = mass_sets[zp_mass]
+        points.sort()
+        xs, ys = zip(*points)
+        ys = [y/sm_val for y in ys]
+        plt.plot(xs, ys, '--g', label=str(zp_mass))
+    plt.ylim((0.95, 8))
+    plt.xlim((0, 2))
+    plt.xlabel('$g_{tZ\'}$', fontsize='xx-large')
+    plt.ylabel(r'$\sigma_{NP+SM} / \sigma_{SM}(pp \rightarrow t\bar{t}t\bar{t})$', fontsize='xx-large')
+    plt.minorticks_on()
+    # plt.legend()
+    labelLines(plt.gca().get_lines(),
+               zorder=2.5,
+               backgroundcolor='white',
+               xvals=(0.12, 1.15),
+               )
+
+@mpb.decl_fig
+def zp_kinem_v_m(gt=0.1):
+    m_edges = [12.5, 37.5, 62.5, 87.5, 112.5, 137.5]
+    pt_xs, pt_ys = np.meshgrid(PT_BINS, m_edges)
+    # eta_xs, eta_ys = np.meshgrid(ETA_BINS, m_edges)
+    # pt_vals = np.zeros((len(PT_BINS)-1,len(m_edges)-1), float)
+    pt_vals = np.zeros((len(m_edges)-1, len(PT_BINS)-1), float)
+
+
+    for idx, mass in enumerate([25, 50, 75, 100, 125]):
+        for task in TASKS.values():
+            zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
+            task_gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
+            if zp_mass != mass or task_gt != gt: continue
+            pt_dist = HISTS[(task, 'top_pt')]
+            pt_dist = pt_dist / pt_dist.integral
+            for i in range(len(PT_BINS)-1):
+                pt_vals[idx, i] = pt_dist.counts[i]
+            break
+    plt.pcolormesh(pt_xs, pt_ys, pt_vals)
+
 
 
 def make_plots(build=False, publish=False):
 
     figures = {}
-    for proc_name in ['tth1_lo', 'tth2_lo']:
-        figures['top_pt_'+proc_name] = multiplot(TASKS, 'top_pt', proc_name)
-        figures['top_eta_'+proc_name] = multiplot(TASKS, 'top_eta', proc_name)
-        figures['top_phi_'+proc_name] = multiplot(TASKS, 'top_phi', proc_name)
+    # for proc_name in ['tttt_lo']:
+    #     figures['top_pt_'+proc_name] = multiplot(TASKS, 'top_pt', proc_name)
+    #     figures['top_eta_'+proc_name] = multiplot(TASKS, 'top_eta', proc_name)
+        # figures['top_phi_'+proc_name] = multiplot(TASKS, 'top_phi', proc_name)
 
-        figures['higgs_pt_'+proc_name] = multiplot(TASKS, 'higgs_pt', proc_name)
-        figures['higgs_eta_'+proc_name] = multiplot(TASKS, 'higgs_eta', proc_name)
-        figures['higgs_phi_'+proc_name] = multiplot(TASKS, 'higgs_phi', proc_name)
+        # figures['higgs_pt_'+proc_name] = multiplot(TASKS, 'higgs_pt', proc_name)
+        # figures['higgs_eta_'+proc_name] = multiplot(TASKS, 'higgs_eta', proc_name)
+        # figures['higgs_phi_'+proc_name] = multiplot(TASKS, 'higgs_phi', proc_name)
+
+    # figures['zp_xs_v_gt'] = zp_xs_v_gt()
+    figures['zp_kinem_v_m_0p1'] = zp_kinem_v_m(0.1)
+    figures['zp_kinem_v_m_0p2'] = zp_kinem_v_m(0.2)
+    figures['zp_kinem_v_m_0p3'] = zp_kinem_v_m(0.3)
+    figures['zp_kinem_v_m_0p4'] = zp_kinem_v_m(0.4)
+    figures['zp_kinem_v_m_0p5'] = zp_kinem_v_m(0.5)
 
     mpb.render(figures, build=build)
     mpb.generate_report(figures, '2HDM Studies',
@@ -189,7 +251,6 @@ def report():
             print('{:10.4f} {:10.4f} {:10.4f} {:10.4f}'.format(mass, h1, h2, h1/h2))
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run MG for TTTT Studies')
     add = parser.add_argument
@@ -218,5 +279,6 @@ if __name__ == '__main__':
         for i, task in enumerate(TASKS.values()):
             print('{}) '.format(i), task.job_name)
     if args.build:
+        # fill_hists(100)
         fill_hists()
     make_plots(build=args.build, publish=args.publish)

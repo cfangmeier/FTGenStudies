@@ -30,3 +30,29 @@ def read_param(run_name, task, block_name, idx):
                 if 'BLOCK '+block_name in line:
                     in_block = True
     raise ValueError("Unable to lookup {} in block {} in {}".format(idx, block_name, fname))
+
+pdgIds = {
+    'd ':  1,
+    'u ':  2,
+    's ':  3,
+    'c ':  4,
+    'b':   5,
+    't':   6,
+    'e':   11,
+    've ': 12,
+    'mu':  13,
+    'vm ': 14,
+    'ta':  15,
+    'vt ': 16,
+    'g':   21,
+    'a':   22,
+    'z':   23,
+    'w':   24,
+    'h':   25,
+    'h1':  25,
+    'h2':  35,
+    'a2':  36,
+    'h3':  36,
+    'hc':  37,
+    'zp':  9000005,
+}

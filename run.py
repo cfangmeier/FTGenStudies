@@ -1,10 +1,11 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 from __future__ import print_function
-import argparse
-from glob import glob
+import sys
 from os import rename, walk, chmod, mkdir
 from os.path import isfile, isdir, expanduser, join, split
+import argparse
+from glob import glob
 from shutil import rmtree
 from subprocess import call, STDOUT
 from pathos.multiprocessing import Pool
@@ -14,7 +15,7 @@ import dill
 import tqdm
 import re
 
-from utils import FLT_RE
+from utils import FLT_RE, pdgIds
 
 class C:
     HEADER = '\033[95m'
@@ -54,31 +55,6 @@ def get_yes_no(prompt, default=False):
             elif x in ('', 'n'):
                 return False
 
-pdgIds = {
-    'd ':  1,
-    'u ':  2,
-    's ':  3,
-    'c ':  4,
-    'b':   5,
-    't':   6,
-    'e':   11,
-    've ': 12,
-    'mu':  13,
-    'vm ': 14,
-    'ta':  15,
-    'vt ': 16,
-    'g':   21,
-    'a':   22,
-    'z':   23,
-    'w':   24,
-    'h':   25,
-    'h1':  25,
-    'h2':  35,
-    'a2':  36,
-    'h3':  36,
-    'hc':  37,
-}
-
 RUN_NAME = "procs"
 
 TEMPLATE = '''
@@ -90,7 +66,6 @@ output {job_name}/{dir_name}/
 launch
 set run_card ebeam1 {beamenergy}
 set run_card ebeam2 {beamenergy}
-set param_card yukawa 6 {yukawa}
 '''
 
 PROCS = {
@@ -135,6 +110,10 @@ PROCS = {
         'tth2_lo': 'generate p p > t t~ h2',
         'tta2_lo': 'generate p p > t t~ a2',
     },
+    # Z-Prime Model
+    "Zprime_UFO": {
+        'tttt_lo': 'generate p p > t t~ t t~',
+    },
 }
 
 notes = {
@@ -177,10 +156,12 @@ def gen_proc(cfg):
     cproc = TEMPLATE.format(proc=PROCS[cfg.model][cfg.proc_name], job_name=RUN_NAME, dir_name=cfg.job_name,
                             model_type=model_type,
                             model=cfg.model,
-                            beamenergy=500*cfg.comenergy, yukawa=1.73e2*cfg.yukawa)
+                            beamenergy=500*cfg.comenergy)
     for pName, mass in cfg.masses:
         pdgId = pdgIds[pName]
         cproc += '\nset param_card mass {} {}'.format(pdgId, mass)
+    for (block, idx), value in cfg.params:
+        cproc += '\nset param_card {} {} {}'.format(block, idx, value)
     fname = join(RUN_NAME, cfg.job_name+'.dat')
     with open(fname, 'w') as f:
         f.write(cproc)
@@ -296,7 +277,6 @@ def gen_json(rows):
         obj['proc'] = row.proc
         obj['invocation'] = PROCS.get(row.proc, 'N/A')
         obj['comenergy'] = row.comenergy
-        obj['yukawa'] = row.yukawa
         obj['crossx'] = row.crossx
         obj['stat_err'] = row.stat_err
         obj['scale_err'] = row.scale_err
@@ -379,12 +359,15 @@ if __name__ == "__main__":
     add('--nokeep', action='store_true')
     add('--noprompt', action='store_true')
     add('--comenergies', default=[13.0], type=float, nargs='+')
-    add('--yukawas', default=[1.0], type=float, nargs="+")
     add('--model', default='sm')
     def mass(arg_str):
-        fst, snd = arg_str.split(':')
-        return fst, float(snd)
-    add('--mass', action='append', default=[], type=mass, metavar='NAME:MASS')
+        label, masses = arg_str.split(':')
+        return label, [float(m) for m in masses.split(',')]
+    def param(arg_str):
+        block, idx, values = arg_str.split(':')
+        return block, int(idx), [float(v) for v in values.split(',')]
+    add('--mass', action='append', default=[], type=mass, metavar='NAME:MASS[,MASS,MASS,...]')
+    add('--param', action='append', default=[], type=param, metavar='BLOCK:IDX:VAL[,VAL,VAL,...]')
 
     args = parser.parse_args()
     NO_PROMPT = args.noprompt
@@ -399,12 +382,22 @@ if __name__ == "__main__":
             mkdir(RUN_NAME)
 
         # NOTE: Update logic here to add additional configuration
-        for comenergy, yukawa in product(args.comenergies, args.yukawas):
+        mass_labels = [x[0] for x in args.mass]
+        mass_sets = [list(zip(mass_labels, x)) for x in product(*[m[1] for m in args.mass])]
+
+        param_labels = [x[0:2] for x in args.param]
+        param_sets = [list(zip(param_labels, x)) for x in product(*[m[2] for m in args.param])]
+
+        # print(param_labels)
+        # print(param_sets)
+        # sys.exit(0)
+
+        for comenergy, mass_set, param_set in product(args.comenergies, mass_sets, param_sets):
             tasks.extend(Task(model=args.model,
                               proc_name=proc_name,
                               comenergy=comenergy,
-                              yukawa=yukawa,
-                              masses=args.mass)
+                              masses=mass_set,
+                              params=param_set)
                          for proc_name in args.processes)
 
         all_tasks = {task.job_name: task for task in tasks}
