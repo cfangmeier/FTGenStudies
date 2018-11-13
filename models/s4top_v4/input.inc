@@ -1,3 +1,0 @@
-c      Input values....
-      double precision gch, gca 
-      common /USR_PARAM/  gch, gca

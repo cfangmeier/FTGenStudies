@@ -29,6 +29,7 @@ def get_label(task):
     h2_mass = read_param(RUN_NAME, task, 'MASS', 35)
     return "$M_h={:.1f}, M_H={:.1f}$".format(h1_mass, h2_mass)
 
+
 def hist_plot(h, include_errors=False, line_width=1, **kwargs):
 
     counts = h.counts
@@ -65,33 +66,31 @@ def fill_hists(max_events=0):
             convert(filename, sql_filename)
         top_pt = []
         top_eta = []
-        # top_phi = []
-        # higgs_pt = []
-        # higgs_eta = []
-        # higgs_phi = []
         with gzip.open(filename, 'r') as f:
             for i, event in enumerate(readLHE(f)):
                 if max_events and i >= max_events: break
                 for p in event.particles:
                     if abs(p.id) == 6:
+                        # print('top', p)
                         top_pt.append(p.pt)
                         top_eta.append(p.eta)
-                        # top_phi.append(p.phi)
-                    # elif abs(p.id) in (25, 35):
-                    #     higgs_pt.append(p.pt)
-                    #     higgs_eta.append(p.eta)
-                    #     higgs_phi.append(p.phi)
         HISTS[(task, 'top_pt')] = Hist1D(top_pt, bins=PT_BINS)
         HISTS[(task, 'top_eta')] = Hist1D(top_eta, bins=ETA_BINS)
 
-        # HISTS[(task.job_name, 'higgs_pt')] = Hist1D(higgs_pt, bins=PT_BINS)
-        # HISTS[(task.job_name, 'higgs_eta')] = Hist1D(higgs_eta, bins=ETA_BINS)
+        for k, h in HISTS.items():
+            HISTS[k] = h / h.integral
+
 
 @mpb.decl_fig
-def multiplot(tasks, plot_name, proc_name=None):
+def multiplot(tasks, plot_name):
 
-    rows = []
-    row_labels = []
+    # rows = []
+    # row_labels = []
+    labels = {
+        'tth1tt_lo': 'p p > t t~ h1, h1 > t t~',
+        'tth2tt_lo': 'p p > t t~ h2, h2 > t t~',
+        'tth3tt_lo': 'p p > t t~ h3, h3 > t t~',
+    }
     for task in tasks.values():
         if proc_name and task.proc_name != proc_name:
             continue
@@ -159,7 +158,6 @@ def zp_kinem_v_m(gt=0.1):
                 pt_vals[idx, i] = pt_dist.counts[i]
             break
     plt.pcolormesh(pt_xs, pt_ys, pt_vals)
-
 
 
 def make_plots(build=False, publish=False):
@@ -263,10 +261,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     from os.path import expanduser
+    # mpb.configure(output_dir='ft_gen_kinematics',
+    #               multiprocess=False,
+    #               publish_remote="local",
+    #               publish_dir=expanduser("~/public_html/FT/"),
+    #               publish_url="t3.unl.edu/~cfangmeier/FT/",
+    #               early_abort=True,
+    #               )
     mpb.configure(output_dir='ft_gen_kinematics',
                   multiprocess=False,
-                  publish_remote="local",
-                  publish_dir=expanduser("~/public_html/FT/"),
+                  publish_remote="cfangmeier@t3.unl.edu",
+                  publish_dir="~/public_html/FT/",
                   publish_url="t3.unl.edu/~cfangmeier/FT/",
                   early_abort=True,
                   )
@@ -277,7 +282,7 @@ if __name__ == '__main__':
         report()
     if args.listtasks:
         for i, task in enumerate(TASKS.values()):
-            print('{}) '.format(i), task.job_name)
+            print('{}) '.format(i), task.proc_name)
     if args.build:
         # fill_hists(100)
         fill_hists()

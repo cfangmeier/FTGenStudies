@@ -1,11 +1,11 @@
-hdm_model="s4top_v4"
-proj="2HDMTesting_s4top"
+hdm_model="2HDMtII_NLO"
+proj="2HDMTesting_2HDMtII_NLO"
 
 # p p > t t~ h1/2 with default settings
-./run.py $proj --model $hdm_model -p tth_lo tth2_lo --noprompt --nokeep
+./run.py $proj --model $hdm_model -p tth1tt_lo tth2tt_lo tth3tt_lo --mass h1:350 --mass h2:350 --mass h3:350 --noprompt --nokeep
 
 # p p > t t~ h for comparison with sm result
-./run.py $proj --model sm -p tth_lo --mass h:125 --noprompt
+# ./run.py $proj --model sm -p tth_lo --mass h:125 --noprompt
 
 # # p p > t t~ h1/2 with equal masses
 # ./run.py $proj --model $hdm_model -p tth1_lo tth2_lo --mass h:125 --mass h2:125 --noprompt
