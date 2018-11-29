@@ -5,6 +5,8 @@ import argparse
 import sys
 from os.path import join, isfile, realpath
 from collections import defaultdict
+from itertools import product
+import logging
 
 import numpy as np
 import matplotlib
@@ -66,7 +68,11 @@ def fill_hists():
         sql_filename = realpath(filename[:-7]+'.sqlite3')
         if not isfile(sql_filename):
             print('converting', filename, '->', sql_filename)
-            convert(filename, sql_filename)
+            try:
+                convert(filename, sql_filename)
+            except Exception as e:
+                print(e)
+                continue
 
         df = pd.read_sql_query(('select px, py, pz from particle '
                                 'where abs(pdgid)==6 and abs(status)==1'),
@@ -109,17 +115,21 @@ def multiplot(tasks, plot_name):
 
 
 @mpb.decl_fig
-def zp_xs_v_gt():
+def zp_xs_v_gt(proc_name):
     from labellines import labelLines
     mass_sets = defaultdict(list)
     sm_val = 0
     for task in TASKS.values():
-        zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
-        gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
-        xs = read_cross_section(RUN_NAME, task)
-        mass_sets[zp_mass].append((gt, xs[0]))
-        if gt == 0:
-            sm_val = xs[0]
+        if task.proc_name != proc_name: continue
+        try:
+            zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
+            gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
+            xs = read_cross_section(RUN_NAME, task)
+            mass_sets[zp_mass].append((gt, xs[0]))
+            if gt == 0:
+                sm_val = xs[0]
+        except:
+            continue
     masses = sorted(mass_sets.keys())
     for zp_mass in masses:
         points = mass_sets[zp_mass]
@@ -145,17 +155,22 @@ def zp_xs_v_gt():
 
 
 @mpb.decl_fig
-def zp_kinem_v_m(gt=0.1, var='pt'):
+def zp_kinem_v_m(gt=0.1, var='pt', proc_name='tttt_lo'):
     for idx, mass in enumerate([25, 50, 75, 100, 125]):
         for task in TASKS.values():
-            zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
-            task_gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
-            if zp_mass == mass and task_gt == gt:
-                dist = HISTS[(task, 'top_'+var)]
-                hist_plot(dist,
-                          label='$M_{Z\'}$='+str(mass)+'GeV',
-                          include_errors=True, alpha=0.75)
-                break
+            try:
+                zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
+                task_gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
+                # print(proc_name, task.proc_name)
+                if zp_mass == mass and task_gt == gt and task.proc_name == proc_name:
+                    dist = HISTS[(task, 'top_'+var)]
+                    hist_plot(dist,
+                              label='$M_{Z\'}$='+str(mass)+'GeV',
+                              include_errors=True, alpha=0.75)
+                    break
+            except Exception as e:
+                logging.exception(e)
+                continue
     plt.legend(loc='upper right')
     if var == 'pt':
         plt.ylim((0, 0.4))
@@ -170,11 +185,14 @@ def make_plots(build=False, publish=False):
 
     figures = {}
 
-    figures['zp_xs_v_gt'] = zp_xs_v_gt()
-    for var in ['pt', 'eta']:
-        for gt in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+    for proc_name in ['tttt_lo', 'tttt_fixedorder_lo']:
+        pfx = 'zp_{}_'.format(proc_name)
+        figures[pfx+'xs_v_gt'] = zp_xs_v_gt(proc_name)
+        for var, gt in product(['pt', 'eta'],
+                               [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]):
             gt_s = '{:.1f}'.format(gt).replace('.', 'p')
-            figures['top_{}_v_m_{}'.format(var, gt_s)] = zp_kinem_v_m(gt, var)
+            figures[pfx+'top_{}_v_m_{}'.format(var, gt_s)] = zp_kinem_v_m(gt, var, proc_name)
+
 
     mpb.render(figures, build=build)
     mpb.generate_report(figures, '2HDM Studies',
@@ -258,20 +276,20 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     from os.path import expanduser
-    # mpb.configure(output_dir='ft_gen_kinematics',
-    #               multiprocess=False,
-    #               publish_remote="local",
-    #               publish_dir=expanduser("~/public_html/FT/"),
-    #               publish_url="t3.unl.edu/~cfangmeier/FT/",
-    #               early_abort=True,
-    #               )
-    mpb.configure(output_dir='z_prime_studies/',
+    mpb.configure(output_dir='z_prime_studies',
                   multiprocess=False,
-                  publish_remote="cfangmeier@t3.unl.edu",
-                  publish_dir="~/public_html/FT/",
+                  publish_remote="local",
+                  publish_dir=expanduser("~/public_html/FT/"),
                   publish_url="t3.unl.edu/~cfangmeier/FT/",
                   early_abort=True,
                   )
+    # mpb.configure(output_dir='z_prime_studies/',
+    #               multiprocess=False,
+    #               publish_remote="cfangmeier@t3.unl.edu",
+    #               publish_dir="~/public_html/FT/",
+    #               publish_url="t3.unl.edu/~cfangmeier/FT/",
+    #               early_abort=True,
+    #               )
 
     RUN_NAME = args.run_name
     read_tasks()

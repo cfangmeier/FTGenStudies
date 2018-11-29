@@ -88,6 +88,7 @@ PROCS = {
         'tth_lo': 'generate p p > t t~ h',
         'tth_nlo': 'generate p p > t t~ h [QCD]',
 
+        'tttt_lo': 'generate p p > t t~ t t~',
         'tttt_lo_only_qcd': 'generate p p > t t~ t t~ QCD=99 QED=0',
         'tttt_lo_only_qed': 'generate p p > t t~ t t~ QCD=0  QED=99',
         'tttt_lo_all':      'generate p p > t t~ t t~ QCD=99 QED=99',
@@ -133,6 +134,8 @@ PROCS = {
     # Z-Prime Model
     "Zprime_UFO": {
         'tttt_lo': 'generate p p > t t~ t t~',
+        'tttt_fixedorder_lo': 'generate p p > t t~ t t~ QED=0 QCD=4 NP=2',
+        'tttt_nlo': 'generate p p > t t~ t t~ [QCD]',
     },
 }
 
