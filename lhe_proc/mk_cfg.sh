@@ -5,8 +5,11 @@
 CMSVER="CMSSW_9_4_6_patch1"
 CONDITIONS="94X_mc2017_realistic_v14"
 LHE_IN="unweighted_events.lhe"
-n=500
-THREADS=1
+if [ $# -ge 1 ]; then
+  LHE_IN=$1
+fi
+n=-1
+THREADS=8
 
 ## SETUP (and build if necessary)
 
