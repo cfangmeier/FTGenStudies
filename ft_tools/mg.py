@@ -42,6 +42,14 @@ def check_install(version_name):
         return False, 'MG5_aMC_v'+version_name
 
 
+def replace_in_file(fname, from_, to):
+    with open(fname, 'r') as f:
+        orig_txt = f.read()
+    edited_txt = orig_txt.replace(from_, to)
+    with open(fname, 'w') as f:
+        f.write(edited_txt)
+
+
 def install_version(version_name):
     from shutil import move
     from os import makedirs, remove, removedirs
@@ -76,12 +84,14 @@ def install_version(version_name):
     # Consider tweaks to stop browser opening, make work with gfortran 8+, etc
     # sh('sed', ['-e', 's/# automatic_html_opening = .*/automatic_html_opening = False/', '-i', 'MG5_aMC/input/mg5_configuration.txt'])
 
+    info('Customizing install')
     # MG crashes with gfortran version 8+, enable legacy mode to avoid this
-    with open(dest+'/Template/LO/SubProcesses/makefile') as f:
-        mk_txt = f.read()
-    mk_txt = mk_txt.replace('FFLAGS+= -w', 'FFLAGS+= -w -std=legacy')
-    with open(dest+'/Template/LO/SubProcesses/makefile', 'w') as f:
-        f.write(mk_txt)
+    replace_in_file(dest+'/Template/LO/SubProcesses/makefile',
+                    'FFLAGS+= -w', 'FFLAGS+= -w -std=legacy')
+    # Tweak config so browser doesn't automatically open upon 'launch'
+    replace_in_file(dest+'/input/mg5_configuration.txt',
+                    '# automatic_html_opening = True', 'automatic_html_opening = False')
+    info('MG ' + version_name + 'installed in ' + dest)
 
 
 if __name__ == '__main__':

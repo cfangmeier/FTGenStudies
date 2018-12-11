@@ -2,50 +2,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function
 
-from sys import version_info
-PY3 = version_info.major == 3
+import sys
 from os import walk, chmod, mkdir
-from os.path import isfile, isdir, expanduser, join, split
+from os.path import isfile, isdir, expanduser, join
 import argparse
 from shutil import rmtree
-from subprocess import call, STDOUT
 from pathos.multiprocessing import Pool
 from itertools import product
 import dill
 import tqdm
 
-from ft_tools.utils import pdgIds, info, info2
+from ft_tools.utils import pdgIds, info, info2, get_yes_no, sh
 import ft_tools.mg as mg
-
-if not PY3:
-    input = raw_input
-
 
 NO_PROMPT = False
 DRYRUN = False
 THE_MG = 'MG5_aMC'
-
-
-def get_yes_no(prompt, default=False):
-    if NO_PROMPT:
-        return default
-    if default:
-        while True:
-            info(prompt + ' (Y/n)')
-            x = input().strip().lower()
-            if x == 'n':
-                return False
-            elif x in ('', 'y'):
-                return True
-    else:
-        while True:
-            info(prompt + ' (y/N)')
-            x = input().strip().lower()
-            if x == 'y':
-                return True
-            elif x in ('', 'n'):
-                return False
-
 RUN_NAME = "procs"
 
 TEMPLATE = '''
@@ -84,11 +56,11 @@ PROCS = {
     },
     # s4top_v4 processes
     "s4top_v4": {
-        'tth': 'generate p p > t t~ h',
+        'tth' : 'generate p p > t t~ h',
         'tth2': 'generate p p > t t~ h2',
         'tth3': 'generate p p > t t~ h3',
 
-        'tth_hTott': 'generate p p > t t~ h, h > t t~',
+        'tth_hTott'  : 'generate p p > t t~ h, h > t t~',
         'tth2_h2Tott': 'generate p p > t t~ h2, h2 > t t~',
         'tth3_h3Tott': 'generate p p > t t~ h3, h3 > t t~',
     },
@@ -113,8 +85,9 @@ PROCS = {
     },
     # DM-PseudoScalar
     "DMPseudo": {
-        'ttchichi': ('generate p p > t t~ chi chi~',
-                     'add process p p > t t~ chi chi~ j'),
+        'ttchichi'    : 'generate p p > t t~ chi chi~',
+        'ttchichiJets': ('generate p p > t t~ chi chi~',
+                         'add process p p > t t~ chi chi~ j'),
     },
 }
 
@@ -124,15 +97,6 @@ notes = {
     'tttt_lo_add_qed': 'Four-top leading order, QCD+QED diagrams',
     'tttt_nlo': 'Four-top next-to-leading order, QCD diagrams only',
 }
-
-
-def sh(cmd, args, output=None):
-    if output is not None:
-        retval = call([cmd] + list(args), stdout=output, stderr=STDOUT)
-    else:
-        retval = call([cmd] + list(args))
-    if retval:
-        raise RuntimeError('command failed to run(' + str(retval) + '): ' + str(cmd) + ' ' + str(args))
 
 
 def gen_proc(task):
@@ -152,9 +116,9 @@ def gen_proc(task):
                             model_type=model_type,
                             model=task.model,
                             beamenergy=500 * task.comenergy)
-    for pName, mass in task.masses:
-        pdgId = pdgIds[pName]
-        cproc += '\nset param_card mass {} {}'.format(pdgId, mass)
+    for pName, set_mass in task.masses:
+        pdg_id = pdgIds[pName]
+        cproc += '\nset param_card mass {} {}'.format(pdg_id, set_mass)
     for (block, idx), value in task.params:
         cproc += '\nset param_card {} {} {}'.format(block, idx, value)
     fname = join(RUN_NAME, task.job_name + '.dat')
@@ -170,12 +134,7 @@ def gen_proc(task):
 
 class Task(object):
     def __init__(self, **kwargs):
-        if PY3:
-            from string import ascii_letters as letters
-        else:
-            from string import letters
-        from string import digits
-        legal_chars = letters + digits + '_-.'
+        legal_chars = 'abcdefghijklmnopqrstufwxyz0123456789_-.'
 
         self._setup = kwargs
         job_name = '_'.join(str(kwargs[key]) for key in sorted(list(kwargs.keys())))
@@ -197,7 +156,7 @@ def main(tasks, mg_version):
         for i, cfg in enumerate(tasks):
             info2('{:2d})  {:20s}  @ {:5.2f}TeV with '.format(i+1, cfg.proc_name, cfg.comenergy) +
                   ', '.join('{}={}'.format(k, v) for k, v in cfg._setup.items() if k not in ('proc_name', 'comenergy')))
-        if not get_yes_no('Proceed?', True):
+        if not get_yes_no('Proceed?', True, no_prompt=NO_PROMPT):
             return
         for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
             pass
@@ -239,8 +198,8 @@ if __name__ == "__main__":
     add('--dryrun', action='store_true', help="Don't invoke madgraph, just write out proc_cards.")
     add('--comenergies', default=[13.0], type=float, nargs='+')
     add('--model', default='sm')
-    add('--mg', default='MG5_aMC')
-    add('--mgversions', action='store_true')
+    add('--mg', default='MG5_aMC', help='version of madgraph to utilize')
+    add('--mgversions', action='store_true', help='List available MG versions and quit')
 
     def mass(arg_str):
         label, masses = arg_str.split(':')
@@ -261,6 +220,7 @@ if __name__ == "__main__":
     if args.mgversions:
         for i, v in enumerate(sorted(mg.get_versions())):
             print('{}) {}'.format(i, v))
+        sys.exit(0)
 
     NO_PROMPT = args.noprompt
     DRYRUN = args.dryrun
@@ -269,7 +229,7 @@ if __name__ == "__main__":
     tasks = []
     if args.processes:
         if isdir(RUN_NAME):
-            if args.nokeep or get_yes_no(RUN_NAME+' exists. Remove old results?'):
+            if args.nokeep or get_yes_no(RUN_NAME+' exists. Remove old results?', no_prompt=NO_PROMPT):
                 rmtree(RUN_NAME, ignore_errors=True)
                 mkdir(RUN_NAME)
         else:

@@ -1,3 +1,4 @@
+six
 launchpadlib
 dill
 beautifulsoup4

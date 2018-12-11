@@ -76,3 +76,5 @@ output DMScalar_ttbar01j_mphi_10_mchi_1_gSM_1p0_gDM_1p0
   - So, it looks like the process being considered is proton-proton to ttbar + chichibar + 0 or 1 extra jet. Let's see if this produces numbers like in the table.
   - The model crashes with a modern version of Madgraph (2.6.X), but the AN says it was used in version 2.2.2. Sadly, this version is not an available release on the Madgraph5_aMC launchpad page. However, 2.2.3 is. A quick test with this release confirmed that the model runs in this version.
   - To help with future efforts that may require cross-version studies, I implemented code to query launchpad for all releases, and then automatically download, install, and configure them upon request with the --mg flag. Frankly, this was probably overkill, but whatever.
+
+  - Comparing cross-section for the case M_phi=50GeV, M_chi=1GeV, the naive run gives a cross-section of 69.36pb while the paper quotes 3.088 (69.36/3.088=22.46).

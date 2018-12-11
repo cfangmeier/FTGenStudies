@@ -2,8 +2,19 @@ from __future__ import print_function
 from os.path import join
 from bs4 import BeautifulSoup as Soup
 import re
+from six.moves import (input)
 
 FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
+
+
+def sh(cmd, args, output=None):
+    from subprocess import call, STDOUT
+    if output is not None:
+        retval = call([cmd] + list(args), stdout=output, stderr=STDOUT)
+    else:
+        retval = call([cmd] + list(args))
+    if retval:
+        raise RuntimeError('command failed to run(' + str(retval) + '): ' + str(cmd) + ' ' + str(args))
 
 
 def read_cross_section(run_name, task):
@@ -59,6 +70,8 @@ pdgIds = {
     'h3':  36,
     'hc':  37,
     'zp':  9000005,
+    'phi': 9100000,  # DM like
+    'chi': 9100022,  # DM like
 }
 
 
@@ -79,3 +92,25 @@ def info(text, **kwargs):
 
 def info2(text, **kwargs):
     print(C.OKGREEN+text+C.ENDC, **kwargs)
+
+
+def get_yes_no(prompt, default=False, no_prompt=False):
+    if no_prompt:
+        return default
+    if default:
+        while True:
+            info(prompt + ' (Y/n)')
+            x = input().strip().lower()
+            if x == 'n':
+                return False
+            elif x in ('', 'y'):
+                return True
+    else:
+        while True:
+            info(prompt + ' (y/N)')
+            x = input().strip().lower()
+            if x == 'y':
+                return True
+            elif x in ('', 'n'):
+                return False
+
