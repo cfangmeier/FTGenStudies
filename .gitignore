@@ -1,6 +1,6 @@
 
 CMSSW_*/
-MG5_aMC/
+MG5_aMC*/
 procs/
 py.py
 *.log
@@ -12,3 +12,5 @@ ME5_debug
 summary.html
 
 src/
+.idea/
+.launchpadlib/

@@ -1,8 +1,10 @@
+from __future__ import print_function
 from os.path import join
 from bs4 import BeautifulSoup as Soup
 import re
 
 FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
+
 
 def read_cross_section(run_name, task):
     fname = join(run_name, task.job_name, 'crossx.html')
@@ -11,6 +13,7 @@ def read_cross_section(run_name, task):
     text_raw = soup.select("tr")[1].select("td")[3].get_text()
     crossx, stat_err = re.findall(r"({flt}) . ({flt})".format(flt=FLT_RE), text_raw, re.UNICODE)[0]
     return float(crossx), float(stat_err)
+
 
 def read_param(run_name, task, block_name, idx):
     fname = join(run_name, task.job_name, 'Cards', 'param_card.dat')
@@ -30,6 +33,7 @@ def read_param(run_name, task, block_name, idx):
                 if 'BLOCK '+block_name in line:
                     in_block = True
     raise ValueError("Unable to lookup {} in block {} in {}".format(idx, block_name, fname))
+
 
 pdgIds = {
     'd ':  1,
@@ -56,3 +60,22 @@ pdgIds = {
     'hc':  37,
     'zp':  9000005,
 }
+
+
+class C:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+def info(text, **kwargs):
+    print(C.HEADER+text+C.ENDC, **kwargs)
+
+
+def info2(text, **kwargs):
+    print(C.OKGREEN+text+C.ENDC, **kwargs)

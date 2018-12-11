@@ -1,3 +1,5 @@
+launchpadlib
+dill
 beautifulsoup4
 whichcraft
 tqdm
