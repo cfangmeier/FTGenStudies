@@ -2,6 +2,7 @@
 CMSSW_*/
 MG5_aMC*/
 procs/
+runs/
 py.py
 *.log
 *.dat

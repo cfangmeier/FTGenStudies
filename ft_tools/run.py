@@ -19,13 +19,14 @@ NO_PROMPT = False
 DRYRUN = False
 THE_MG = 'MG5_aMC'
 RUN_NAME = "procs"
+RUN_DIR = "runs/procs"
 
 TEMPLATE = '''
 import {model_type} {model}
 define p = p b b~
 define j = p
 {proc}
-output {job_name}/{dir_name}/
+output {run_dir}/{dir_name}/
 launch
 set run_card ebeam1 {beamenergy}
 set run_card ebeam2 {beamenergy}
@@ -100,7 +101,7 @@ notes = {
 
 
 def gen_proc(task):
-    log = open(join(RUN_NAME, task.job_name) + '.log', 'w')
+    log = open(join(RUN_DIR, task.job_name) + '.log', 'w')
     model_type = "model"
     if task.model[-3:] == "_v4":
         model_type += "_v4"
@@ -112,22 +113,22 @@ def gen_proc(task):
     except KeyError:
         print("Error: Unkown process '{}' for model '{}'".format(task.proc_name, task.model))
         return
-    cproc = TEMPLATE.format(proc=proc, job_name=RUN_NAME, dir_name=task.job_name,
+    cproc = TEMPLATE.format(proc=proc, run_dir=RUN_DIR, dir_name=task.job_name,
                             model_type=model_type,
                             model=task.model,
-                            beamenergy=500 * task.comenergy)
+                            beamenergy=500 * task.com_energy)
     for pName, set_mass in task.masses:
         pdg_id = pdgIds[pName]
         cproc += '\nset param_card mass {} {}'.format(pdg_id, set_mass)
     for (block, idx), value in task.params:
         cproc += '\nset param_card {} {} {}'.format(block, idx, value)
-    fname = join(RUN_NAME, task.job_name + '.dat')
+    fname = join(RUN_DIR, task.job_name + '.dat')
     with open(fname, 'w') as f:
         f.write(cproc)
 
     if not DRYRUN:
-        log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV\n".format(task.proc_name, task.comenergy))
-        rmtree(join(RUN_NAME, task.job_name), ignore_errors=True)
+        log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV\n".format(task.proc_name, task.com_energy))
+        rmtree(join(RUN_DIR, task.job_name), ignore_errors=True)
         sh('./'+THE_MG+'/bin/mg5_aMC', ['-f', fname], output=log)
     log.close()
 
@@ -154,8 +155,8 @@ def main(tasks, mg_version):
         pool = Pool(3)
         info('Generating the following processes:')
         for i, cfg in enumerate(tasks):
-            info2('{:2d})  {:20s}  @ {:5.2f}TeV with '.format(i+1, cfg.proc_name, cfg.comenergy) +
-                  ', '.join('{}={}'.format(k, v) for k, v in cfg._setup.items() if k not in ('proc_name', 'comenergy')))
+            info2('{:2d})  {:20s}  @ {:5.2f}TeV with '.format(i+1, cfg.proc_name, cfg.com_energy) +
+                  ', '.join('{}={}'.format(k, v) for k, v in cfg._setup.items() if k not in ('proc_name', 'com_energy')))
         if not get_yes_no('Proceed?', True, no_prompt=NO_PROMPT):
             return
         for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
@@ -225,15 +226,19 @@ if __name__ == "__main__":
     NO_PROMPT = args.noprompt
     DRYRUN = args.dryrun
     RUN_NAME = args.run_name
+    RUN_NAME = RUN_NAME.replace('runs/', '')
+    RUN_DIR = 'runs/' + RUN_NAME
 
     tasks = []
     if args.processes:
-        if isdir(RUN_NAME):
+        if not isdir('runs/'):
+            mkdir('runs')
+        if isdir(RUN_DIR):
             if args.nokeep or get_yes_no(RUN_NAME+' exists. Remove old results?', no_prompt=NO_PROMPT):
-                rmtree(RUN_NAME, ignore_errors=True)
-                mkdir(RUN_NAME)
+                rmtree(RUN_DIR, ignore_errors=True)
+                mkdir(RUN_DIR)
         else:
-            mkdir(RUN_NAME)
+            mkdir(RUN_DIR)
 
         # NOTE: Update logic here to add additional configuration
         mass_labels = [x[0] for x in args.mass]
@@ -246,17 +251,17 @@ if __name__ == "__main__":
         # print(param_sets)
         # sys.exit(0)
 
-        for comenergy, mass_set, param_set in product(args.comenergies, mass_sets, param_sets):
+        for com_energy, mass_set, param_set in product(args.comenergies, mass_sets, param_sets):
             tasks.extend(Task(model=args.model,
                               proc_name=proc_name,
                               proc_order=proc_order,
-                              comenergy=comenergy,
+                              com_energy=com_energy,
                               masses=mass_set,
                               params=param_set)
                          for proc_name, proc_order in args.processes)
 
         all_tasks = {task.job_name: task for task in tasks}
-        dill_filename = join(RUN_NAME, 'batch.dill')
+        dill_filename = join(RUN_DIR, 'batch.dill')
         if not args.nokeep and isfile(dill_filename):
             with open(dill_filename, 'rb') as f:
                 all_tasks.update(dill.load(f))
