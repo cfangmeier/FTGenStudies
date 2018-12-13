@@ -10,7 +10,7 @@
 
 
 ## Notes
-  - In the AN, reference 18 points to [here][https://svnweb.cern.ch/cern/wsvn/LHCDMF/trunk/models/HF_S%2BPS/contributed_by_KristianHahn/?#abad0c22e163585557a6e88956511f7f3] which is an SVN share containing madgraph model files for both scalar and pseudoscalar DM mediator models. I downloaded them and placed them in `models/`. The models are called:
+  - In the AN, reference 18 points to [here](https://svnweb.cern.ch/cern/wsvn/LHCDMF/trunk/models/HF_S%2BPS/contributed_by_KristianHahn/?#abad0c22e163585557a6e88956511f7f3) which is an SVN share containing madgraph model files for both scalar and pseudoscalar DM mediator models. I downloaded them and placed them in `models/`. The models are called:
     - `DMScalar`
     - `DMPseudo`
   - Now, the task is to attempt to work out exactly what the cross-sections in table 4 of the above AN mean. One way to do that is to attempt to replicate them with known, explicit configuration. Let's first try to replicate the first line which is:
