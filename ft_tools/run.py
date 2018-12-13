@@ -81,11 +81,14 @@ PROCS = {
     },
     # DM-Scalar
     "DMScalar": {
-        'ttchichi': ('generate p p > t t~ chi chi~',
-                     'add process p p > t t~ chi chi~ j'),
+        'tt'          : 'generate p p > t t~',
+        'ttchichi'    : 'generate p p > t t~ chi chi~',
+        'ttchichiJets': ('generate p p > t t~ chi chi~',
+                         'add process p p > t t~ chi chi~ j'),
     },
     # DM-PseudoScalar
     "DMPseudo": {
+        'tt'          : 'generate p p > t t~',
         'ttchichi'    : 'generate p p > t t~ chi chi~',
         'ttchichiJets': ('generate p p > t t~ chi chi~',
                          'add process p p > t t~ chi chi~ j'),
@@ -135,7 +138,9 @@ def gen_proc(task):
 
 class Task(object):
     def __init__(self, **kwargs):
-        legal_chars = 'abcdefghijklmnopqrstufwxyz0123456789_-.'
+        legal_chars = ('abcdefghijklmnopqrstufwxyz'
+                       'ABCDEFGHIJKLMNOPQRSTUFWXYZ'
+                       '0123456789_-.')
 
         self._setup = kwargs
         job_name = '_'.join(str(kwargs[key]) for key in sorted(list(kwargs.keys())))
@@ -214,7 +219,7 @@ if __name__ == "__main__":
 
     def process(arg_str):
         return arg_str.split(':') if ':' in arg_str else (arg_str, '')
-    add('--processes', action='append', default=[], type=process, metavar='PROCNAME:(ORDER)')
+    add('--proc', action='append', default=[], type=process, metavar='PROCNAME:(ORDER)')
 
     args = parser.parse_args()
 
@@ -230,7 +235,7 @@ if __name__ == "__main__":
     RUN_DIR = 'runs/' + RUN_NAME
 
     tasks = []
-    if args.processes:
+    if args.proc:
         if not isdir('runs/'):
             mkdir('runs')
         if isdir(RUN_DIR):
@@ -258,7 +263,7 @@ if __name__ == "__main__":
                               com_energy=com_energy,
                               masses=mass_set,
                               params=param_set)
-                         for proc_name, proc_order in args.processes)
+                         for proc_name, proc_order in args.proc)
 
         all_tasks = {task.job_name: task for task in tasks}
         dill_filename = join(RUN_DIR, 'batch.dill')

@@ -8,8 +8,8 @@ LHE_IN="unweighted_events.lhe"
 if [ $# -ge 1 ]; then
   LHE_IN=$1
 fi
-n=-1
-THREADS=8
+n=10000
+THREADS=4
 
 ## SETUP (and build if necessary)
 
@@ -99,7 +99,6 @@ fi
 ###########################################################
 
 if [ ! -f step3_cfg.py ]; then
-# --filein "dbs:/WJetsToLNu_TuneCP5_13TeV-madgraphMLM-pythia8/RunIIFall17DRPremix-94X_mc2017_realistic_v10-v1/AODSIM" \
   cmsDriver.py step3 \
       --filein file:step2.root \
       --fileout file:step3.root \

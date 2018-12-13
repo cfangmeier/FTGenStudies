@@ -34,10 +34,24 @@ generator = cms.EDFilter("Pythia8HadronizerFilter",
             'JetMatching:etaJetMax = 5.',
             'JetMatching:coneRadius = 1.',
             'JetMatching:slowJetPower = 1',
-            'JetMatching:qCut = 19.', #this is the actual merging scale
+            # 'JetMatching:qCut = 19.', #this is the actual merging scale
+            'JetMatching:qCut = 59.',
+            # 'JetMatching:nJetMax = 4', #number of partons in born matrix element for highest multiplicity
+            'JetMatching:nJetMax = 0', #number of partons in born matrix element for highest multiplicity
             'JetMatching:nQmatch = 5', #4 corresponds to 4-flavour scheme (no matching of b-quarks), 5 for 5-flavour scheme
-            'JetMatching:nJetMax = 4', #number of partons in born matrix element for highest multiplicity
             'JetMatching:doShowerKt = off', #off for MLM matching, turn on for shower-kT matching
+
+            # Add a dilepton filter for faster processing
+            '6:m0 = 172.5',
+            '24:mMin = 0.1',
+            '23:mMin = 0.1',
+            'ResonanceDecayFilter:filter = on',
+            'ResonanceDecayFilter:exclusive = off', #off: require at least the specified num
+            'ResonanceDecayFilter:eMuAsEquivalent = off', #on: treat electrons and muons as
+            'ResonanceDecayFilter:eMuTauAsEquivalent = on', #on: treat electrons, muons , an
+            'ResonanceDecayFilter:allNuAsEquivalent = on', #on: treat all three neutrino fla
+            'ResonanceDecayFilter:daughters = 11,11',
+            'Check:abortIfVeto = on',
         ),
         parameterSets = cms.vstring('pythia8CommonSettings',
                                     'pythia8CP5Settings',
@@ -45,3 +59,5 @@ generator = cms.EDFilter("Pythia8HadronizerFilter",
                                     )
     )
 )
+
+
