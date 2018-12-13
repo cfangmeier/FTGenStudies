@@ -9,6 +9,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from ft_tools.results import Run
+
 def get_theory_numbers():
 
     def xs(yt):

@@ -1,3 +1,5 @@
+functools32
+requests
 six
 launchpadlib
 dill
