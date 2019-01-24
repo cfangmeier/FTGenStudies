@@ -4,7 +4,7 @@ from __future__ import print_function
 
 import sys
 from os import walk, chmod, mkdir
-from os.path import isfile, isdir, expanduser, join
+from os.path import isfile, isdir, expanduser, join, realpath
 import argparse
 from shutil import rmtree
 from pathos.multiprocessing import Pool
@@ -19,19 +19,78 @@ NO_PROMPT = False
 DRYRUN = False
 THE_MG = 'MG5_aMC'
 RUN_NAME = "procs"
-RUN_DIR = "runs/procs"
+BASE_DIR = "./"
+RUN_DIR = join(BASE_DIR, 'runs', RUN_NAME)
 
-TEMPLATE = '''
+CARD_TEMPLATE = '''
+set run_mode {run_mode}
+set nb_core {nb_core}
 import {model_type} {model}
 define p = p b b~
 define j = p
 {proc}
-output {run_dir}/{dir_name}/
+output {output}
 launch
 set run_card ebeam1 {beamenergy}
 set run_card ebeam2 {beamenergy}
-set run_card nevents 1000
+set run_card nevents {nevent}
 '''
+
+CONDOR_TEMPLATE = '''
+Universe      = Docker
++WantDocker   = True
+docker_image  = "opensciencegrid/osgvo-el6"
+executable    = {job_name}.sh
+error         = condor_logs/{job_name}.err
+output        = condor_logs/{job_name}.out
+log           = condor_logs/condor.log
+requirements  = (TARGET.Machine != "t3.unl.edu")
+RequestMemory = 3500
+
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files = {job_name}.dat,{mg_path}
+
+queue
+'''
+
+CONDOR_EXE_TEMPLATE = '''\
+#!/usr/bin/env bash
+
+cmshome="/cvmfs/cms.cern.ch/slc6_amd64_gcc530/cms/cmssw/CMSSW_9_2_8/src/"
+
+echo "starting run. Current time: " $(date)
+echo "running @ " $(pwd) "in " $(hostname)
+echo "Initial Directory Contents:"
+ls -la
+
+echo "Setting up environment"
+source /cvmfs/cms.cern.ch/cmsset_default.sh
+cd $cmshome
+eval `scramv1 runtime -sh`
+cd -
+
+echo "Done. Listing env"
+env
+
+echo "Unpacking job content"
+tar -xzf {the_mg}.tar.gz
+rm {the_mg}.tar.gz
+echo "Finished unpacking"
+echo "Current Directory Contents:"
+ls -la
+
+echo "Starting Madgraph"
+./{the_mg}/bin/mg5_aMC -f {job_name}.dat
+echo "Madgraph finished"
+echo "Current Directory Contents:"
+ls -la
+
+echo "Packing up Results"
+tar -czf {job_name}.tar.gz {job_name}/
+echo "Finished!"
+'''
+
 
 PROCS = {
     # SM processes
@@ -116,10 +175,19 @@ def gen_proc(task):
     except KeyError:
         print("Error: Unkown process '{}' for model '{}'".format(task.proc_name, task.model))
         return
-    cproc = TEMPLATE.format(proc=proc, run_dir=RUN_DIR, dir_name=task.job_name,
-                            model_type=model_type,
-                            model=task.model,
-                            beamenergy=500 * task.com_energy)
+    if HTCONDOR:
+        output = task.job_name
+    else:
+        output = join(RUN_DIR, task.job_name)
+    # run_mode = 0 if HTCONDOR else 2
+    run_mode = 2
+    cproc = CARD_TEMPLATE.format(proc=proc, output=output,
+                                 model_type=model_type,
+                                 model=task.model,
+                                 beamenergy=500 * task.com_energy,
+                                 run_mode=run_mode,
+                                 nb_core=NCORE,
+                                 nevent=NEVENT)
     for pName, set_mass in task.masses:
         pdg_id = pdgIds[pName]
         cproc += '\nset param_card mass {} {}'.format(pdg_id, set_mass)
@@ -129,7 +197,19 @@ def gen_proc(task):
     with open(fname, 'w') as f:
         f.write(cproc)
 
-    if not DRYRUN:
+    if HTCONDOR:
+        # Need to
+        #  1. zip up the card and MG directory to ship over to the worker node.
+        #  2. Write a script to source the environment, unzip the directory, and execute madgraph
+        with open(join(RUN_DIR, task.job_name+'.condor'), 'w') as f:
+            mg_path = realpath(THE_MG+'.tar.gz')
+            f.write(CONDOR_TEMPLATE.format(job_name=task.job_name, the_mg=THE_MG, mg_path=mg_path))
+        with open(join(RUN_DIR, task.job_name+'.sh'), 'w') as f:
+            f.write(CONDOR_EXE_TEMPLATE.format(job_name=task.job_name, the_mg=THE_MG))
+        if not DRYRUN:
+            sh('condor_submit', [task.job_name+'.condor'], cwd=RUN_DIR, output=log)
+
+    elif not DRYRUN:
         log.write("Running Madgraph for process \"{}\" @ {:.1f}TeV\n".format(task.proc_name, task.com_energy))
         rmtree(join(RUN_DIR, task.job_name), ignore_errors=True)
         sh('./'+THE_MG+'/bin/mg5_aMC', ['-f', fname], output=log)
@@ -157,15 +237,25 @@ def main(tasks, mg_version):
         mg.install_version(mg_version)
 
     if tasks:
-        pool = Pool(3)
         info('Generating the following processes:')
         for i, cfg in enumerate(tasks):
             info2('{:2d})  {:20s}  @ {:5.2f}TeV with '.format(i+1, cfg.proc_name, cfg.com_energy) +
                   ', '.join('{}={}'.format(k, v) for k, v in cfg._setup.items() if k not in ('proc_name', 'com_energy')))
         if not get_yes_no('Proceed?', True, no_prompt=NO_PROMPT):
             return
-        for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
-            pass
+        if HTCONDOR:
+            if not isfile(THE_MG+'.tar.gz'):
+                sh('tar', ['-czf', THE_MG+'.tar.gz', THE_MG])
+            if not isdir(join(RUN_DIR, 'condor_logs')):
+                mkdir(join(RUN_DIR, 'condor_logs'))
+            for task in tqdm.tqdm(tasks, total=len(tasks)):
+                gen_proc(task)
+        else:
+            # pool = Pool(3)
+            # for _ in tqdm.tqdm(pool.imap_unordered(gen_proc, tasks), total=len(tasks)):
+            #     pass
+            for _ in tqdm.tqdm((gen_proc(task) for task in tasks), total=len(tasks)):
+                pass
 
     if args.publish:
         pubdir = join(expanduser('~'), 'public_html')
@@ -198,13 +288,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MG for TTTT Studies")
     add = parser.add_argument
     add('run_name')
+    add('--workin', default='./', help='Place to dump results from run')
     add('--publish', action='store_true')
     add('--nokeep', action='store_true')
     add('--noprompt', action='store_true')
     add('--dryrun', action='store_true', help="Don't invoke madgraph, just write out proc_cards.")
+    add('--condor', action='store_true', help="Run jobs as HTCondor submissions")
     add('--comenergies', default=[13.0], type=float, nargs='+')
     add('--model', default='sm')
-    add('--mg', default='MG5_aMC', help='version of madgraph to utilize')
+    add('--ncore', default=4)
+    add('--nevent', default=1000)
+    add('--mg', default='2_6_4', help='version of madgraph to utilize')
     add('--mgversions', action='store_true', help='List available MG versions and quit')
 
     def mass(arg_str):
@@ -230,14 +324,17 @@ if __name__ == "__main__":
 
     NO_PROMPT = args.noprompt
     DRYRUN = args.dryrun
-    RUN_NAME = args.run_name
-    RUN_NAME = RUN_NAME.replace('runs/', '')
-    RUN_DIR = 'runs/' + RUN_NAME
+    HTCONDOR = args.condor
+    NCORE = args.ncore
+    NEVENT = args.nevent
+    RUN_NAME = args.run_name[args.run_name.rfind('/')+1:]  # strip directory if supplied
+    BASE_DIR = args.workin
+    RUN_DIR = join(BASE_DIR, 'runs', RUN_NAME)
 
     tasks = []
     if args.proc:
-        if not isdir('runs/'):
-            mkdir('runs')
+        if not isdir(join(BASE_DIR, 'runs')):
+            mkdir(join(BASE_DIR, 'runs'))
         if isdir(RUN_DIR):
             if args.nokeep or get_yes_no(RUN_NAME+' exists. Remove old results?', no_prompt=NO_PROMPT):
                 rmtree(RUN_DIR, ignore_errors=True)

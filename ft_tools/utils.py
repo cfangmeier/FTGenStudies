@@ -3,12 +3,12 @@ from __future__ import print_function
 FLT_RE = r"(?:|\+ ?|- ?)\d+\.?\d*(?:[eE][+-]\d+)?"
 
 
-def sh(cmd, args, output=None):
+def sh(cmd, args, output=None, cwd=None):
     from subprocess import call, STDOUT
     if output is not None:
-        retval = call([cmd] + list(args), stdout=output, stderr=STDOUT)
+        retval = call([cmd] + list(args), stdout=output, stderr=STDOUT, cwd=cwd)
     else:
-        retval = call([cmd] + list(args))
+        retval = call([cmd] + list(args), cwd=cwd)
     if retval:
         raise RuntimeError('command failed to run(' + str(retval) + '): ' + str(cmd) + ' ' + str(args))
 
