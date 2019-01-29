@@ -23,7 +23,6 @@ def get_versions():
     for release in MG5.releases:
         for file in release.files:
             fname = file.self_link.split('/')[-1]
-            # print(fname)
             v_maj, v_min, v_bfx, _, v_ext = re.findall(r'.*v([0-9]+)[\._]([0-9]+)[\._]([0-9]+)([\._](.*))?.tar.gz', fname)[0]
             v_name = '_'.join([v_maj, v_min, v_bfx])
             if v_ext:
@@ -80,9 +79,6 @@ def install_version(version_name):
         info2('{})  {}'.format(i, model))
         with tarfile.open(model, 'r:gz') as f:
             f.extractall(dest + '/models/')
-
-    # Consider tweaks to stop browser opening, make work with gfortran 8+, etc
-    # sh('sed', ['-e', 's/# automatic_html_opening = .*/automatic_html_opening = False/', '-i', 'MG5_aMC/input/mg5_configuration.txt'])
 
     info('Customizing install')
     # MG crashes with gfortran version 8+, enable legacy mode to avoid this

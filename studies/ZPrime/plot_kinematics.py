@@ -2,25 +2,21 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function
 import argparse
-import sys
-from os.path import join, isfile, realpath
 from collections import defaultdict
 from itertools import product
 import logging
 
 import numpy as np
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import pandas as pd
 
 import matplotboard as mpb
-from matplottery.utils import Hist1D, to_html_table
-from lhe2sqlite import convert
+from matplottery.utils import Hist1D
+from ft_tools.results import Run
+from ft_tools.utils import pdgIds
 
-from utils import read_cross_section, read_param, pdgIds
-
-TASKS = {}
 HISTS = {}
 
 RUN_NAME = "procs"
@@ -29,14 +25,13 @@ PT_BINS = np.linspace(0, 1500, 20, endpoint=True)
 ETA_BINS = np.linspace(-7, 7, 20, endpoint=True)
 
 
-def get_label(task):
-    h1_mass = read_param(RUN_NAME, task, 'MASS', 25)
-    h2_mass = read_param(RUN_NAME, task, 'MASS', 35)
+def get_label(run, task):
+    h1_mass = run.read_param(task, 'MASS', 25)
+    h2_mass = run.read_param(task, 'MASS', 35)
     return "$M_h={:.1f}, M_H={:.1f}$".format(h1_mass, h2_mass)
 
 
 def hist_plot(h, include_errors=False, line_width=1, **kwargs):
-
     counts = h.counts
     edges = h.edges
     left, right = edges[:-1], edges[1:]
@@ -54,31 +49,13 @@ def hist_plot(h, include_errors=False, line_width=1, **kwargs):
                      barsabove=True, elinewidth=.7, capsize=1)
 
 
-def read_tasks():
-    global TASKS
-    from dill import load
-    with open(join(RUN_NAME, 'batch.dill'), 'r') as f:
-        TASKS = load(f)
+def fill_hists(run):
+    for task in run.tasks.values():
+        query = "SELECT px, py, pz FROM particle WHERE abs(pdgid)==6 AND abs(status)==1"
 
-
-def fill_hists():
-    for task in TASKS.values():
-        print('loading task', task.job_name)
-        filename = join(RUN_NAME, task.job_name, 'Events', 'run_01', 'unweighted_events.lhe.gz')
-        sql_filename = realpath(filename[:-7]+'.sqlite3')
-        if not isfile(sql_filename):
-            print('converting', filename, '->', sql_filename)
-            try:
-                convert(filename, sql_filename)
-            except Exception as e:
-                print(e)
-                continue
-
-        df = pd.read_sql_query(('select px, py, pz from particle '
-                                'where abs(pdgid)==6 and abs(status)==1'),
-                               'sqlite:///'+sql_filename)
-        df['pt'] = np.sqrt(df['px']**2 + df['py']**2)
-        df['p'] = np.sqrt(df['px']**2 + df['py']**2 + df['pz']**2)
+        df = run.query_events(task, query)
+        df['pt'] = np.sqrt(df['px'] ** 2 + df['py'] ** 2)
+        df['p'] = np.sqrt(df['px'] ** 2 + df['py'] ** 2 + df['pz'] ** 2)
         df['eta'] = np.arctanh(df['pz'] / df['p'])
 
         HISTS[(task, 'top_pt')] = Hist1D(np.array(df['pt']), bins=PT_BINS)
@@ -89,8 +66,7 @@ def fill_hists():
 
 
 @mpb.decl_fig
-def multiplot(tasks, plot_name):
-
+def multiplot(run, plot_name):
     # rows = []
     # row_labels = []
     labels = {
@@ -98,7 +74,7 @@ def multiplot(tasks, plot_name):
         'tth2tt_lo': 'p p > t t~ h2, h2 > t t~',
         'tth3tt_lo': 'p p > t t~ h3, h3 > t t~',
     }
-    for task in tasks.values():
+    for task in run.tasks.values():
         if proc_name and task.proc_name != proc_name:
             continue
         # label = get_label(task)
@@ -110,21 +86,21 @@ def multiplot(tasks, plot_name):
         #              '{}+-{}'.format(cross_section, error)])
         # row_labels.append(task.proc_name)
     plt.legend()
-    plt.ylim((0,None))
+    plt.ylim((0, None))
     # return to_html_table(rows, ['', '$m_h$ (GeV)', '$m_H$ (GeV)', r'$\sigma$ (pb)'], row_labels, 'table-condensed')
 
 
 @mpb.decl_fig
-def zp_xs_v_gt(proc_name):
+def zp_xs_v_gt(run, proc_name):
     from labellines import labelLines
     mass_sets = defaultdict(list)
     sm_val = 0
-    for task in TASKS.values():
+    for task in run.tasks.values():
         if task.proc_name != proc_name: continue
         try:
-            zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
-            gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
-            xs = read_cross_section(RUN_NAME, task)
+            zp_mass = run.read_param(task, 'MASS', pdgIds['zp'])
+            gt = run.read_param(task, 'ZPRIME', 1)
+            xs = run.read_cross_section(task)
             mass_sets[zp_mass].append((gt, xs[0]))
             if gt == 0:
                 sm_val = xs[0]
@@ -135,7 +111,7 @@ def zp_xs_v_gt(proc_name):
         points = mass_sets[zp_mass]
         points.sort()
         xs, ys = zip(*points)
-        ys = [y/sm_val for y in ys]
+        ys = [y / sm_val for y in ys]
         plt.plot(xs, ys, '--g', label=str(zp_mass))
     plt.ylim((0.95, 8))
     plt.xlim((0, 2))
@@ -155,17 +131,17 @@ def zp_xs_v_gt(proc_name):
 
 
 @mpb.decl_fig
-def zp_kinem_v_m(gt=0.1, var='pt', proc_name='tttt_lo'):
+def zp_kinem_v_m(run, gt=0.1, var='pt', proc_name='tttt'):
     for idx, mass in enumerate([25, 50, 75, 100, 125]):
-        for task in TASKS.values():
+        for task in run.tasks.values():
             try:
-                zp_mass = read_param(RUN_NAME, task, 'MASS', pdgIds['zp'])
-                task_gt = read_param(RUN_NAME, task, 'ZPRIME', 1)
+                zp_mass = run.read_param(task, 'MASS', pdgIds['zp'])
+                task_gt = run.read_param(task, 'ZPRIME', 1)
                 # print(proc_name, task.proc_name)
                 if zp_mass == mass and task_gt == gt and task.proc_name == proc_name:
-                    dist = HISTS[(task, 'top_'+var)]
+                    dist = HISTS[(task, 'top_' + var)]
                     hist_plot(dist,
-                              label='$M_{Z\'}$='+str(mass)+'GeV',
+                              label='$M_{Z\'}$=' + str(mass) + 'GeV',
                               include_errors=True, alpha=0.75)
                     break
             except Exception as e:
@@ -181,18 +157,15 @@ def zp_kinem_v_m(gt=0.1, var='pt', proc_name='tttt_lo'):
     plt.text(0.1, 0.3, '$g_t={}$'.format(gt), transform=plt.gca().transAxes)
 
 
-def make_plots(build=False, publish=False):
-
+def make_plots(run, build=False, publish=False):
     figures = {}
 
-    for proc_name in ['tttt_lo', 'tttt_fixedorder_lo']:
-        pfx = 'zp_{}_'.format(proc_name)
-        figures[pfx+'xs_v_gt'] = zp_xs_v_gt(proc_name)
-        for var, gt in product(['pt', 'eta'],
-                               [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]):
-            gt_s = '{:.1f}'.format(gt).replace('.', 'p')
-            figures[pfx+'top_{}_v_m_{}'.format(var, gt_s)] = zp_kinem_v_m(gt, var, proc_name)
-
+    pfx = 'zp_tttt_'
+    figures[pfx + 'xs_v_gt'] = zp_xs_v_gt(run, 'tttt')
+    for var, gt in product(['pt', 'eta'],
+                           [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]):
+        gt_s = '{:.1f}'.format(gt).replace('.', 'p')
+        figures[pfx + 'top_{}_v_m_{}'.format(var, gt_s)] = zp_kinem_v_m(run, gt, var, 'tttt')
 
     mpb.render(figures, build=build)
     mpb.generate_report(figures, '2HDM Studies',
@@ -203,17 +176,16 @@ def make_plots(build=False, publish=False):
         mpb.publish()
 
 
-def report():
-
+def report(run):
     const_h1s = []
     const_h2s = []
-    for task in TASKS.values():
-        xs = read_cross_section(RUN_NAME, task)
-        if task.proc_name == 'tth1_lo' and read_param(RUN_NAME, task, 'MASS', 25) == 125:
-            m = read_param(RUN_NAME, task, 'MASS', 35)
+    for task in run.tasks.values():
+        xs = run.read_cross_section(task)
+        if task.proc_name == 'tth1_lo' and run.read_param(task, 'MASS', 25) == 125:
+            m = run.read_param(task, 'MASS', 35)
             const_h1s.append((m, xs))
-        if task.proc_name == 'tth2_lo' and read_param(RUN_NAME, task, 'MASS', 35) == 125:
-            m = read_param(RUN_NAME, task, 'MASS', 25)
+        if task.proc_name == 'tth2_lo' and run.read_param(task, 'MASS', 35) == 125:
+            m = run.read_param(task, 'MASS', 25)
             const_h2s.append((m, xs))
 
     const_h1s.sort()
@@ -226,29 +198,29 @@ def report():
         print(m, xs[0])
 
     print('SM')
-    for task in TASKS.values():
+    for task in run.tasks.values():
         if task.proc_name == 'tth_lo':
-            print(read_cross_section(RUN_NAME, task))
+            print(run.read_cross_section(task))
             break
 
     print('h1 + h2')
     h1h2 = 0
     h = 0
-    for task in TASKS.values():
+    for task in run.tasks.values():
         if task.proc_name == 'tthxbb_lo':
-            h1h2 = read_cross_section(RUN_NAME, task)
+            h1h2 = run.read_cross_section(task)
         elif task.proc_name == 'tthbb_lo':
-            h = read_cross_section(RUN_NAME, task)
+            h = run.read_cross_section(task)
     print('h1+h2', h1h2)
     print('sm h', h)
 
     print('ratios')
     pairs = defaultdict(dict)
-    for task in TASKS.values():
-        xs = read_cross_section(RUN_NAME, task)
+    for task in run.tasks.values():
+        xs = run.read_cross_section(task)
         try:
-            m1 = read_param(RUN_NAME, task, 'MASS', 25)
-            m2 = read_param(RUN_NAME, task, 'MASS', 35)
+            m1 = run.read_param(task, 'MASS', 25)
+            m2 = run.read_param(task, 'MASS', 35)
         except:
             continue
         if m1 != m2:
@@ -261,7 +233,7 @@ def report():
         if len(xss) == 2:
             h1 = xss['h1'][0]
             h2 = xss['h2'][0]
-            print('{:10.4f} {:10.4f} {:10.4f} {:10.4f}'.format(mass, h1, h2, h1/h2))
+            print('{:10.4f} {:10.4f} {:10.4f} {:10.4f}'.format(mass, h1, h2, h1 / h2))
 
 
 if __name__ == '__main__':
@@ -275,30 +247,20 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    from os.path import expanduser
+    # from os.path import expanduser
     mpb.configure(output_dir='z_prime_studies',
                   multiprocess=False,
-                  publish_remote="local",
-                  publish_dir=expanduser("~/public_html/FT/"),
+                  publish_remote="cfangmeier@t3.unl.edu",
+                  publish_dir="public_html/FT/",
                   publish_url="t3.unl.edu/~cfangmeier/FT/",
                   early_abort=True,
                   )
-    # mpb.configure(output_dir='z_prime_studies/',
-    #               multiprocess=False,
-    #               publish_remote="cfangmeier@t3.unl.edu",
-    #               publish_dir="~/public_html/FT/",
-    #               publish_url="t3.unl.edu/~cfangmeier/FT/",
-    #               early_abort=True,
-    #               )
 
-    RUN_NAME = args.run_name
-    read_tasks()
-    if args.report:
-        report()
-    if args.listtasks:
-        for i, task in enumerate(TASKS.values()):
-            print('{}) '.format(i), task.proc_name)
+    the_run = Run(args.run_name)
+    # if args.report:
+    #     report()
+    # for i, task in enumerate(run.tasks.values()):
+    #     print('{}) '.format(i), task.proc_name)
     if args.build:
-        # fill_hists(100)
-        fill_hists()
-    make_plots(build=args.build, publish=args.publish)
+        fill_hists(the_run)
+    make_plots(the_run, build=args.build, publish=args.publish)
